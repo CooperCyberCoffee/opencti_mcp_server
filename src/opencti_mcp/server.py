@@ -803,7 +803,19 @@ class OpenCTIMCPServer:
 
         for idx, entity in enumerate(results, 1):
             output += f"## {idx}. {entity.get('name', 'Unknown')}\n\n"
+            output += f"- **Entity ID:** `{entity.get('id', 'N/A')}`\n"
             output += f"- **Entity Type:** {entity.get('entity_type', 'Unknown')}\n"
+
+            # Add MITRE ID if available
+            mitre_id = entity.get('mitre_id')
+            if mitre_id:
+                output += f"- **MITRE ID:** {mitre_id}\n"
+
+            # Add aliases if available
+            aliases = entity.get('aliases', [])
+            if aliases:
+                output += f"- **Aliases:** {', '.join(aliases[:5])}\n"
+
             output += f"- **Description:** {entity.get('description', 'No description')}\n"
 
             labels = entity.get('labels', [])
@@ -811,6 +823,18 @@ class OpenCTIMCPServer:
                 output += f"- **Labels:** {', '.join(labels[:5])}\n"
 
             output += "\n"
+
+        # Add usage hint for query chaining
+        output += (
+            "---\n\n"
+            "**💡 Query Chaining:**\n"
+            "Use the Entity IDs above with relationship query functions:\n"
+            "- `get_threat_actor_ttps(actor_name=<entity_id>)` - Get threat actor TTPs\n"
+            "- `get_malware_techniques(malware_name=<entity_id>)` - Get malware techniques\n"
+            "- `get_campaign_details(campaign_name=<entity_id>)` - Get campaign details\n"
+            "- `get_entity_relationships(entity_id=<entity_id>)` - Get all relationships\n\n"
+            "You can also use names, aliases, or MITRE IDs - the MCP server will resolve them automatically!\n"
+        )
 
         self.logger.info("entity_search_complete", results=len(results))
 

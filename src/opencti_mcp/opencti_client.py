@@ -10,10 +10,12 @@ For consulting and enterprise inquiries: business@coopercybercoffee.com
 """
 
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from pycti import OpenCTIApiClient
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
+from datetime import datetime, timedelta
 
 
 class OpenCTIClient:
@@ -40,14 +42,19 @@ class OpenCTIClient:
         'ready'
     """
 
-    def __init__(self, url: str, token: str, ssl_verify: bool = False):
+    def __init__(self, url: str, token: str, ssl_verify: bool = False, debug: bool = False):
         """Initialize OpenCTI client with connection parameters."""
         self.url = url
         self.token = token
         self.ssl_verify = ssl_verify
+        self.debug = debug
         self._client = None
         self._executor = ThreadPoolExecutor(max_workers=4)
         self.logger = logging.getLogger(__name__)
+
+        # Simple cache for entity resolution (prevents redundant lookups)
+        self._entity_cache = {}
+        self._cache_ttl = timedelta(minutes=15)
 
     async def _get_client(self) -> OpenCTIApiClient:
         """Lazy initialization of OpenCTI client with connection validation.
@@ -163,6 +170,280 @@ class OpenCTIClient:
         except Exception as e:
             self.logger.error(f"OpenCTI validation failed: {e}")
             raise
+
+    def _get_cached(self, cache_key: str) -> Optional[Any]:
+        """Get value from cache if not expired.
+
+        Args:
+            cache_key: Cache key to lookup
+
+        Returns:
+            Cached value or None if not found/expired
+        """
+        if cache_key in self._entity_cache:
+            data, timestamp = self._entity_cache[cache_key]
+            if datetime.now() - timestamp < self._cache_ttl:
+                if self.debug:
+                    self.logger.info(f"[DEBUG] Cache hit for: {cache_key}")
+                return data
+        return None
+
+    def _set_cached(self, cache_key: str, data: Any):
+        """Store value in cache with current timestamp.
+
+        Args:
+            cache_key: Cache key to store under
+            data: Data to cache
+        """
+        self._entity_cache[cache_key] = (data, datetime.now())
+        if self.debug:
+            self.logger.info(f"[DEBUG] Cached: {cache_key}")
+
+    async def _resolve_threat_actor(self, name: str) -> Tuple[Optional[str], Optional[str]]:
+        """Resolve threat actor by name, alias, MITRE ID, or entity ID.
+
+        This implements robust two-step resolution:
+        1. Check if already an entity ID → return immediately
+        2. Search by exact name → check aliases → check MITRE ID → fuzzy match
+
+        Args:
+            name: Threat actor name, alias, MITRE ID (e.g., "G0007"), or entity ID
+
+        Returns:
+            Tuple of (entity_id, entity_type) or (None, None) if not found
+
+        Example:
+            >>> entity_id, entity_type = await self._resolve_threat_actor("APT28")
+            >>> entity_id, entity_type = await self._resolve_threat_actor("Fancy Bear")
+            >>> entity_id, entity_type = await self._resolve_threat_actor("G0007")
+        """
+        # Quick path: Already an entity ID
+        if name.startswith('intrusion-set--'):
+            return (name, 'intrusion-set')
+        if name.startswith('threat-actor--'):
+            return (name, 'threat-actor')
+
+        # Check cache
+        cache_key = f"threat_actor:{name.lower()}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+
+        if self.debug:
+            self.logger.info(f"[DEBUG] Resolving threat actor: '{name}'")
+
+        client = await self._get_client()
+
+        def _search_and_match():
+            # Try intrusion sets first (most common for APT groups)
+            try:
+                if self.debug:
+                    self.logger.info(f"[DEBUG] Searching intrusion sets for: '{name}'")
+
+                intrusion_sets = client.intrusion_set.list(search=name, first=10)
+
+                if intrusion_sets:
+                    # Priority 1: Exact name match (case-insensitive)
+                    for iset in intrusion_sets:
+                        if iset.get('name', '').lower() == name.lower():
+                            if self.debug:
+                                self.logger.info(f"[DEBUG] Found exact name match: {iset.get('name')}")
+                            return (iset['id'], 'intrusion-set')
+
+                    # Priority 2: Alias match
+                    for iset in intrusion_sets:
+                        aliases = iset.get('aliases', []) or []
+                        if any(alias.lower() == name.lower() for alias in aliases):
+                            if self.debug:
+                                self.logger.info(f"[DEBUG] Found alias match in: {iset.get('name')}")
+                            return (iset['id'], 'intrusion-set')
+
+                    # Priority 3: MITRE ID match
+                    for iset in intrusion_sets:
+                        mitre_id = iset.get('x_mitre_id', '')
+                        if mitre_id and mitre_id.upper() == name.upper():
+                            if self.debug:
+                                self.logger.info(f"[DEBUG] Found MITRE ID match: {mitre_id}")
+                            return (iset['id'], 'intrusion-set')
+
+                    # Priority 4: Fuzzy match (first result from search)
+                    if self.debug:
+                        self.logger.info(f"[DEBUG] Using fuzzy match: {intrusion_sets[0].get('name')}")
+                    return (intrusion_sets[0]['id'], 'intrusion-set')
+
+            except Exception as e:
+                if self.debug:
+                    self.logger.warning(f"[DEBUG] Intrusion set search failed: {e}")
+
+            # Try threat actors as fallback
+            try:
+                if self.debug:
+                    self.logger.info(f"[DEBUG] Searching threat actors for: '{name}'")
+
+                threat_actors = client.threat_actor.list(search=name, first=10)
+
+                if threat_actors:
+                    # Same priority matching as above
+                    for actor in threat_actors:
+                        if actor.get('name', '').lower() == name.lower():
+                            if self.debug:
+                                self.logger.info(f"[DEBUG] Found exact name match: {actor.get('name')}")
+                            return (actor['id'], 'threat-actor')
+
+                    for actor in threat_actors:
+                        aliases = actor.get('aliases', []) or []
+                        if any(alias.lower() == name.lower() for alias in aliases):
+                            if self.debug:
+                                self.logger.info(f"[DEBUG] Found alias match in: {actor.get('name')}")
+                            return (actor['id'], 'threat-actor')
+
+                    if self.debug:
+                        self.logger.info(f"[DEBUG] Using fuzzy match: {threat_actors[0].get('name')}")
+                    return (threat_actors[0]['id'], 'threat-actor')
+
+            except Exception as e:
+                if self.debug:
+                    self.logger.warning(f"[DEBUG] Threat actor search failed: {e}")
+
+            return (None, None)
+
+        result = await asyncio.get_event_loop().run_in_executor(
+            self._executor, _search_and_match
+        )
+
+        # Cache the result
+        if result[0]:
+            self._set_cached(cache_key, result)
+
+        return result
+
+    async def _resolve_malware(self, name: str) -> Tuple[Optional[str], Optional[str]]:
+        """Resolve malware by name, alias, or entity ID.
+
+        Args:
+            name: Malware name, alias, or entity ID
+
+        Returns:
+            Tuple of (entity_id, 'malware') or (None, None) if not found
+        """
+        # Quick path: Already an entity ID
+        if name.startswith('malware--'):
+            return (name, 'malware')
+
+        # Check cache
+        cache_key = f"malware:{name.lower()}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+
+        if self.debug:
+            self.logger.info(f"[DEBUG] Resolving malware: '{name}'")
+
+        client = await self._get_client()
+
+        def _search_and_match():
+            try:
+                malwares = client.malware.list(search=name, first=10)
+
+                if malwares:
+                    # Priority 1: Exact name match
+                    for malware in malwares:
+                        if malware.get('name', '').lower() == name.lower():
+                            if self.debug:
+                                self.logger.info(f"[DEBUG] Found exact match: {malware.get('name')}")
+                            return (malware['id'], 'malware')
+
+                    # Priority 2: Alias match
+                    for malware in malwares:
+                        aliases = malware.get('aliases', []) or []
+                        if any(alias.lower() == name.lower() for alias in aliases):
+                            if self.debug:
+                                self.logger.info(f"[DEBUG] Found alias match in: {malware.get('name')}")
+                            return (malware['id'], 'malware')
+
+                    # Priority 3: Fuzzy match
+                    if self.debug:
+                        self.logger.info(f"[DEBUG] Using fuzzy match: {malwares[0].get('name')}")
+                    return (malwares[0]['id'], 'malware')
+
+            except Exception as e:
+                if self.debug:
+                    self.logger.warning(f"[DEBUG] Malware search failed: {e}")
+
+            return (None, None)
+
+        result = await asyncio.get_event_loop().run_in_executor(
+            self._executor, _search_and_match
+        )
+
+        if result[0]:
+            self._set_cached(cache_key, result)
+
+        return result
+
+    async def _resolve_campaign(self, name: str) -> Tuple[Optional[str], Optional[str]]:
+        """Resolve campaign by name or entity ID.
+
+        Args:
+            name: Campaign name or entity ID
+
+        Returns:
+            Tuple of (entity_id, 'campaign') or (None, None) if not found
+        """
+        # Quick path: Already an entity ID
+        if name.startswith('campaign--'):
+            return (name, 'campaign')
+
+        # Check cache
+        cache_key = f"campaign:{name.lower()}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+
+        if self.debug:
+            self.logger.info(f"[DEBUG] Resolving campaign: '{name}'")
+
+        client = await self._get_client()
+
+        def _search_and_match():
+            try:
+                campaigns = client.campaign.list(search=name, first=10)
+
+                if campaigns:
+                    # Priority 1: Exact name match
+                    for campaign in campaigns:
+                        if campaign.get('name', '').lower() == name.lower():
+                            if self.debug:
+                                self.logger.info(f"[DEBUG] Found exact match: {campaign.get('name')}")
+                            return (campaign['id'], 'campaign')
+
+                    # Priority 2: Alias match
+                    for campaign in campaigns:
+                        aliases = campaign.get('aliases', []) or []
+                        if any(alias.lower() == name.lower() for alias in aliases):
+                            if self.debug:
+                                self.logger.info(f"[DEBUG] Found alias match in: {campaign.get('name')}")
+                            return (campaign['id'], 'campaign')
+
+                    # Priority 3: Fuzzy match
+                    if self.debug:
+                        self.logger.info(f"[DEBUG] Using fuzzy match: {campaigns[0].get('name')}")
+                    return (campaigns[0]['id'], 'campaign')
+
+            except Exception as e:
+                if self.debug:
+                    self.logger.warning(f"[DEBUG] Campaign search failed: {e}")
+
+            return (None, None)
+
+        result = await asyncio.get_event_loop().run_in_executor(
+            self._executor, _search_and_match
+        )
+
+        if result[0]:
+            self._set_cached(cache_key, result)
+
+        return result
 
     async def get_recent_indicators(
         self,
@@ -600,7 +881,9 @@ class OpenCTIClient:
                                 "name": entity.get("name"),
                                 "description": entity.get("description", "No description available")[:300],
                                 "created_at": entity.get("created_at"),
-                                "labels": [label.get("value") for label in entity.get("objectLabel", [])]
+                                "labels": [label.get("value") for label in entity.get("objectLabel", [])],
+                                "mitre_id": entity.get("x_mitre_id"),  # MITRE ATT&CK ID if available
+                                "aliases": entity.get("aliases", []) or []  # Alternative names
                             }
                             formatted.append(formatted_entity)
 
@@ -633,56 +916,46 @@ class OpenCTIClient:
     ) -> Dict[str, Any]:
         """Get attack patterns (TTPs) used by a threat actor or intrusion set.
 
+        Supports multiple input formats:
+        - Threat actor name: "APT28"
+        - Alias: "Fancy Bear", "Sofacy"
+        - MITRE ID: "G0007"
+        - Entity ID: "intrusion-set--abc123..."
+
         Args:
-            actor_name: Threat actor/intrusion set name or ID
+            actor_name: Threat actor/intrusion set name, alias, MITRE ID, or entity ID
             limit: Maximum number of attack patterns to return
 
         Returns:
             Dictionary containing actor info and associated attack patterns
 
         Example:
-            >>> ttps = await client.get_threat_actor_ttps("APT29")
-            >>> print(f"Found {len(ttps['attack_patterns'])} techniques")
+            >>> ttps = await client.get_threat_actor_ttps("APT28")  # by name
+            >>> ttps = await client.get_threat_actor_ttps("Fancy Bear")  # by alias
+            >>> ttps = await client.get_threat_actor_ttps("G0007")  # by MITRE ID
         """
         try:
-            self.logger.info(f"[DEBUG] get_threat_actor_ttps called with: '{actor_name}'")
+            # Step 1: Resolve entity using robust two-step resolution
+            actor_id, entity_type = await self._resolve_threat_actor(actor_name)
 
-            # Step 1: Get entity ID (either from input or by searching)
-            actor_id = None
-            resolved_actor_name = actor_name
+            if not actor_id:
+                self.logger.error(f"Threat actor not found: '{actor_name}'")
+                return {
+                    "actor_name": actor_name,
+                    "actor_id": None,
+                    "found": False,
+                    "attack_patterns": [],
+                    "error": f"No threat actor found matching '{actor_name}'",
+                    "searched_for": actor_name,
+                    "suggestions": [
+                        "Try a different actor name or alias (e.g., 'Fancy Bear', 'Sofacy')",
+                        "Use the MITRE ATT&CK ID (e.g., 'G0007' for APT28)",
+                        "Search first using search_entities to verify the actor exists"
+                    ]
+                }
 
-            if not actor_name.startswith("intrusion-set--") and not actor_name.startswith("threat-actor--"):
-                self.logger.info(f"[DEBUG] Not an ID, using search_entities to find actor: '{actor_name}'")
-
-                # Use search_entities to find the threat actor (same method that works for user)
-                search_results = await self.search_entities(
-                    search_term=actor_name,
-                    entity_types=["Intrusion-Set", "Threat-Actor"],
-                    limit=1
-                )
-
-                self.logger.info(f"[DEBUG] search_entities returned {len(search_results)} results")
-
-                if search_results:
-                    actor_id = search_results[0]["id"]
-                    resolved_actor_name = search_results[0]["name"]
-                    self.logger.info(f"[DEBUG] Found actor via search_entities: id={actor_id}, name={resolved_actor_name}")
-                else:
-                    self.logger.error(f"[DEBUG] search_entities found no results for '{actor_name}'")
-                    return {
-                        "actor_name": actor_name,
-                        "actor_id": None,
-                        "found": False,
-                        "attack_patterns": [],
-                        "error": f"No threat actor found matching '{actor_name}'",
-                        "searched_for": actor_name,
-                        "suggestion": "Try search_entities tool first to verify the actor exists and get the correct name"
-                    }
-            else:
-                actor_id = actor_name
-                self.logger.info(f"[DEBUG] Input is already an ID: {actor_id}")
-
-            self.logger.info(f"[DEBUG] Proceeding with GraphQL query for actor_id: {actor_id}")
+            if self.debug:
+                self.logger.info(f"[DEBUG] Resolved '{actor_name}' → {actor_id} ({entity_type})")
 
             # Step 2: Query relationships using GraphQL
             client = await self._get_client()
@@ -806,57 +1079,45 @@ class OpenCTIClient:
     ) -> Dict[str, Any]:
         """Get attack patterns used by malware and associated threat actors.
 
+        Supports multiple input formats:
+        - Malware name: "Emotet"
+        - Alias: "Heodo"
+        - Entity ID: "malware--abc123..."
+
         Args:
-            malware_name: Malware name or ID
+            malware_name: Malware name, alias, or entity ID
             limit: Maximum number of results to return
 
         Returns:
             Dictionary containing malware info and associated techniques
 
         Example:
-            >>> techniques = await client.get_malware_techniques("Emotet")
-            >>> print(f"Found {len(techniques['attack_patterns'])} techniques")
+            >>> techniques = await client.get_malware_techniques("Emotet")  # by name
+            >>> techniques = await client.get_malware_techniques("Heodo")  # by alias
         """
         try:
-            self.logger.info(f"[DEBUG] get_malware_techniques called with: '{malware_name}'")
+            # Step 1: Resolve entity using robust two-step resolution
+            malware_id, entity_type = await self._resolve_malware(malware_name)
 
-            # Step 1: Get entity ID (either from input or by searching)
-            malware_id = None
-            resolved_malware_name = malware_name
+            if not malware_id:
+                self.logger.error(f"Malware not found: '{malware_name}'")
+                return {
+                    "malware_name": malware_name,
+                    "malware_id": None,
+                    "found": False,
+                    "attack_patterns": [],
+                    "threat_actors": [],
+                    "error": f"No malware found matching '{malware_name}'",
+                    "searched_for": malware_name,
+                    "suggestions": [
+                        "Try a different malware name or variant",
+                        "Try common aliases for the malware",
+                        "Search first using search_entities or get_malware to verify the malware exists"
+                    ]
+                }
 
-            if not malware_name.startswith("malware--"):
-                self.logger.info(f"[DEBUG] Not an ID, using search_entities to find malware: '{malware_name}'")
-
-                # Use search_entities to find the malware
-                search_results = await self.search_entities(
-                    search_term=malware_name,
-                    entity_types=["Malware"],
-                    limit=1
-                )
-
-                self.logger.info(f"[DEBUG] search_entities returned {len(search_results)} results")
-
-                if search_results:
-                    malware_id = search_results[0]["id"]
-                    resolved_malware_name = search_results[0]["name"]
-                    self.logger.info(f"[DEBUG] Found malware via search_entities: id={malware_id}, name={resolved_malware_name}")
-                else:
-                    self.logger.error(f"[DEBUG] search_entities found no results for '{malware_name}'")
-                    return {
-                        "malware_name": malware_name,
-                        "malware_id": None,
-                        "found": False,
-                        "attack_patterns": [],
-                        "threat_actors": [],
-                        "error": f"No malware found matching '{malware_name}'",
-                        "searched_for": malware_name,
-                        "suggestion": "Try search_entities or get_malware tool first to verify the malware exists"
-                    }
-            else:
-                malware_id = malware_name
-                self.logger.info(f"[DEBUG] Input is already an ID: {malware_id}")
-
-            self.logger.info(f"[DEBUG] Proceeding with GraphQL query for malware_id: {malware_id}")
+            if self.debug:
+                self.logger.info(f"[DEBUG] Resolved '{malware_name}' → {malware_id}")
 
             # Step 2: Query relationships using GraphQL
             client = await self._get_client()
@@ -964,58 +1225,45 @@ class OpenCTIClient:
     ) -> Dict[str, Any]:
         """Get comprehensive campaign details with full relationship graph.
 
+        Supports multiple input formats:
+        - Campaign name: "SolarWinds Compromise"
+        - Alias: "SUNBURST"
+        - Entity ID: "campaign--abc123..."
+
         Args:
-            campaign_name: Campaign name or ID
+            campaign_name: Campaign name, alias, or entity ID
 
         Returns:
             Dictionary containing campaign details and all relationships
 
         Example:
-            >>> campaign = await client.get_campaign_details("Operation X")
-            >>> print(f"Campaign has {len(campaign['threat_actors'])} threat actors")
+            >>> campaign = await client.get_campaign_details("SolarWinds Compromise")
         """
         try:
-            self.logger.info(f"[DEBUG] get_campaign_details called with: '{campaign_name}'")
+            # Step 1: Resolve entity using robust two-step resolution
+            campaign_id, entity_type = await self._resolve_campaign(campaign_name)
 
-            # Step 1: Get entity ID (either from input or by searching)
-            campaign_id = None
-            resolved_campaign_name = campaign_name
+            if not campaign_id:
+                self.logger.error(f"Campaign not found: '{campaign_name}'")
+                return {
+                    "campaign_name": campaign_name,
+                    "campaign_id": None,
+                    "found": False,
+                    "threat_actors": [],
+                    "attack_patterns": [],
+                    "malware": [],
+                    "targets": [],
+                    "error": f"No campaign found matching '{campaign_name}'",
+                    "searched_for": campaign_name,
+                    "suggestions": [
+                        "Try a different campaign name",
+                        "Try common aliases for the campaign",
+                        "Search first using search_entities with entity_types=['Campaign']"
+                    ]
+                }
 
-            if not campaign_name.startswith("campaign--"):
-                self.logger.info(f"[DEBUG] Not an ID, using search_entities to find campaign: '{campaign_name}'")
-
-                # Use search_entities to find the campaign
-                search_results = await self.search_entities(
-                    search_term=campaign_name,
-                    entity_types=["Campaign"],
-                    limit=1
-                )
-
-                self.logger.info(f"[DEBUG] search_entities returned {len(search_results)} results")
-
-                if search_results:
-                    campaign_id = search_results[0]["id"]
-                    resolved_campaign_name = search_results[0]["name"]
-                    self.logger.info(f"[DEBUG] Found campaign via search_entities: id={campaign_id}, name={resolved_campaign_name}")
-                else:
-                    self.logger.error(f"[DEBUG] search_entities found no results for '{campaign_name}'")
-                    return {
-                        "campaign_name": campaign_name,
-                        "campaign_id": None,
-                        "found": False,
-                        "threat_actors": [],
-                        "attack_patterns": [],
-                        "malware": [],
-                        "targets": [],
-                        "error": f"No campaign found matching '{campaign_name}'",
-                        "searched_for": campaign_name,
-                        "suggestion": "Try search_entities tool first to verify the campaign exists"
-                    }
-            else:
-                campaign_id = campaign_name
-                self.logger.info(f"[DEBUG] Input is already an ID: {campaign_id}")
-
-            self.logger.info(f"[DEBUG] Proceeding with GraphQL query for campaign_id: {campaign_id}")
+            if self.debug:
+                self.logger.info(f"[DEBUG] Resolved '{campaign_name}' → {campaign_id}")
 
             # Step 2: Query relationships using GraphQL
             client = await self._get_client()
