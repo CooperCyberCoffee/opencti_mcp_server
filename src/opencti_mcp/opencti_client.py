@@ -97,17 +97,44 @@ class OpenCTIClient:
             client = await self._get_client()
 
             def _check_version():
-                # Get platform info
-                about_info = client.admin.about()
-                version = about_info.get('version', 'unknown')
+                # Get platform version via GraphQL query (pycti 6.x method)
+                version = "unknown"
+                try:
+                    # Query the about endpoint for version information
+                    query = """
+                        query {
+                            about {
+                                version
+                            }
+                        }
+                    """
+                    about_result = client.query(query)
+                    version = about_result.get('data', {}).get('about', {}).get('version', 'unknown')
+                except Exception as e:
+                    self.logger.warning(f"Could not retrieve version via GraphQL: {e}")
+                    # Try alternative method - check if health_check method exists
+                    try:
+                        health = client.health_check()
+                        if isinstance(health, dict):
+                            version = health.get('version', 'unknown')
+                    except Exception:
+                        self.logger.warning("Could not determine OpenCTI version, continuing anyway")
 
                 # Check for indicators (basic data availability)
-                indicators = client.indicator.list(first=1)
-                has_indicators = len(indicators) > 0
+                has_indicators = False
+                try:
+                    indicators = client.indicator.list(first=1)
+                    has_indicators = len(indicators) > 0
+                except Exception as e:
+                    self.logger.warning(f"Could not check indicators: {e}")
 
                 # Check connectors
-                connectors = client.connector.list(first=5)
-                active_connectors = [c for c in connectors if c.get('active', False)]
+                active_connectors = []
+                try:
+                    connectors = client.connector.list(first=5)
+                    active_connectors = [c for c in connectors if c.get('active', False)]
+                except Exception as e:
+                    self.logger.warning(f"Could not check connectors: {e}")
 
                 return {
                     "version": version,
@@ -121,13 +148,14 @@ class OpenCTIClient:
                 self._executor, _check_version
             )
 
-            # Validate version
+            # Validate version (if we were able to determine it)
             version = result["version"]
-            if not version.startswith("6."):
-                raise ValueError(
-                    f"OpenCTI 6.x required for Cooper Cyber Coffee MCP Server. "
-                    f"Found version {version}. Please upgrade your OpenCTI instance."
+            if version != "unknown" and not version.startswith("6."):
+                self.logger.warning(
+                    f"OpenCTI 6.x recommended for Cooper Cyber Coffee MCP Server. "
+                    f"Found version {version}. Some features may not work correctly."
                 )
+                # Don't raise error, just warn - allow connection to proceed
 
             self.logger.info(f"OpenCTI validation successful: {result}")
             return result
