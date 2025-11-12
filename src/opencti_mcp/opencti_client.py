@@ -638,34 +638,50 @@ class OpenCTIClient:
                 actor_id = None
                 resolved_actor_name = actor_name
 
+                self.logger.info(f"[DEBUG] get_threat_actor_ttps called with: '{actor_name}'")
+
                 if not actor_name.startswith("intrusion-set--") and not actor_name.startswith("threat-actor--"):
+                    self.logger.info(f"[DEBUG] Not an ID, searching for actor by name: '{actor_name}'")
+
                     # Search for threat actor or intrusion set
                     try:
+                        self.logger.info(f"[DEBUG] Trying intrusion_set.list(search='{actor_name}', first=1)")
                         actors = client.intrusion_set.list(search=actor_name, first=1)
+                        self.logger.info(f"[DEBUG] intrusion_set.list returned type: {type(actors)}, length: {len(actors) if actors else 0}")
                         if actors:
+                            self.logger.info(f"[DEBUG] First actor: {actors[0]}")
                             actor_id = actors[0].get("id")
                             resolved_actor_name = actors[0].get("name")
-                    except:
-                        pass
+                            self.logger.info(f"[DEBUG] Found intrusion set: id={actor_id}, name={resolved_actor_name}")
+                    except Exception as e:
+                        self.logger.warning(f"[DEBUG] intrusion_set.list failed: {type(e).__name__}: {e}")
 
                     if not actor_id:
                         try:
+                            self.logger.info(f"[DEBUG] Trying threat_actor.list(search='{actor_name}', first=1)")
                             actors = client.threat_actor.list(search=actor_name, first=1)
+                            self.logger.info(f"[DEBUG] threat_actor.list returned type: {type(actors)}, length: {len(actors) if actors else 0}")
                             if actors:
+                                self.logger.info(f"[DEBUG] First actor: {actors[0]}")
                                 actor_id = actors[0].get("id")
                                 resolved_actor_name = actors[0].get("name")
-                        except:
-                            pass
+                                self.logger.info(f"[DEBUG] Found threat actor: id={actor_id}, name={resolved_actor_name}")
+                        except Exception as e:
+                            self.logger.warning(f"[DEBUG] threat_actor.list failed: {type(e).__name__}: {e}")
                 else:
                     actor_id = actor_name
+                    self.logger.info(f"[DEBUG] Input is already an ID: {actor_id}")
 
                 if not actor_id:
+                    self.logger.error(f"[DEBUG] No actor found for '{actor_name}' - search exhausted")
                     return {
                         "actor_name": actor_name,
                         "actor_id": None,
                         "found": False,
                         "attack_patterns": []
                     }
+
+                self.logger.info(f"[DEBUG] Proceeding with GraphQL query for actor_id: {actor_id}")
 
                 # GraphQL query to get attack patterns
                 query = """
@@ -712,10 +728,15 @@ class OpenCTIClient:
                 """
 
                 try:
+                    self.logger.info(f"[DEBUG] Executing GraphQL query with id: {actor_id}")
                     result = client.query(query, {"id": actor_id})
+                    self.logger.info(f"[DEBUG] GraphQL result keys: {result.keys() if result else 'None'}")
+
                     data = result.get("data", {}).get("stixDomainObject", {})
+                    self.logger.info(f"[DEBUG] stixDomainObject data: {data}")
 
                     if not data:
+                        self.logger.warning(f"[DEBUG] No stixDomainObject data returned for id: {actor_id}")
                         return {
                             "actor_name": resolved_actor_name,
                             "actor_id": actor_id,
@@ -725,9 +746,12 @@ class OpenCTIClient:
 
                     # Extract attack patterns
                     patterns = []
-                    attack_patterns_data = data.get("attackPatterns", {}).get("edges", [])
+                    attack_patterns_data = data.get("attackPatterns", {})
+                    self.logger.info(f"[DEBUG] attackPatterns data type: {type(attack_patterns_data)}")
+                    edges = attack_patterns_data.get("edges", []) if attack_patterns_data else []
+                    self.logger.info(f"[DEBUG] Found {len(edges)} attack pattern edges")
 
-                    for edge in attack_patterns_data[:limit]:
+                    for edge in edges[:limit]:
                         node = edge.get("node", {})
                         patterns.append({
                             "id": node.get("id"),
@@ -795,15 +819,26 @@ class OpenCTIClient:
                 malware_id = None
                 resolved_malware_name = malware_name
 
+                self.logger.info(f"[DEBUG] get_malware_techniques called with: '{malware_name}'")
+
                 if not malware_name.startswith("malware--"):
-                    malwares = client.malware.list(search=malware_name, first=1)
-                    if malwares:
-                        malware_id = malwares[0].get("id")
-                        resolved_malware_name = malwares[0].get("name")
+                    self.logger.info(f"[DEBUG] Not an ID, searching for malware by name: '{malware_name}'")
+                    try:
+                        malwares = client.malware.list(search=malware_name, first=1)
+                        self.logger.info(f"[DEBUG] malware.list returned type: {type(malwares)}, length: {len(malwares) if malwares else 0}")
+                        if malwares:
+                            self.logger.info(f"[DEBUG] First malware: {malwares[0]}")
+                            malware_id = malwares[0].get("id")
+                            resolved_malware_name = malwares[0].get("name")
+                            self.logger.info(f"[DEBUG] Found malware: id={malware_id}, name={resolved_malware_name}")
+                    except Exception as e:
+                        self.logger.warning(f"[DEBUG] malware.list failed: {type(e).__name__}: {e}")
                 else:
                     malware_id = malware_name
+                    self.logger.info(f"[DEBUG] Input is already an ID: {malware_id}")
 
                 if not malware_id:
+                    self.logger.error(f"[DEBUG] No malware found for '{malware_name}'")
                     return {
                         "malware_name": malware_name,
                         "malware_id": None,
@@ -811,6 +846,8 @@ class OpenCTIClient:
                         "attack_patterns": [],
                         "threat_actors": []
                     }
+
+                self.logger.info(f"[DEBUG] Proceeding with GraphQL query for malware_id: {malware_id}")
 
                 # GraphQL query for malware techniques and threat actors
                 query = """
@@ -838,10 +875,15 @@ class OpenCTIClient:
                 """
 
                 try:
+                    self.logger.info(f"[DEBUG] Executing GraphQL query with id: {malware_id}")
                     result = client.query(query, {"id": malware_id})
+                    self.logger.info(f"[DEBUG] GraphQL result keys: {result.keys() if result else 'None'}")
+
                     data = result.get("data", {}).get("malware", {})
+                    self.logger.info(f"[DEBUG] malware data: {data}")
 
                     if not data:
+                        self.logger.warning(f"[DEBUG] No malware data returned for id: {malware_id}")
                         return {
                             "malware_name": resolved_malware_name,
                             "malware_id": malware_id,
@@ -852,9 +894,12 @@ class OpenCTIClient:
 
                     # Extract attack patterns
                     patterns = []
-                    attack_patterns_data = data.get("attackPatterns", {}).get("edges", [])
+                    attack_patterns_data = data.get("attackPatterns", {})
+                    self.logger.info(f"[DEBUG] attackPatterns data type: {type(attack_patterns_data)}")
+                    edges = attack_patterns_data.get("edges", []) if attack_patterns_data else []
+                    self.logger.info(f"[DEBUG] Found {len(edges)} attack pattern edges")
 
-                    for edge in attack_patterns_data[:limit]:
+                    for edge in edges[:limit]:
                         node = edge.get("node", {})
                         patterns.append({
                             "id": node.get("id"),
@@ -923,15 +968,26 @@ class OpenCTIClient:
                 campaign_id = None
                 resolved_campaign_name = campaign_name
 
+                self.logger.info(f"[DEBUG] get_campaign_details called with: '{campaign_name}'")
+
                 if not campaign_name.startswith("campaign--"):
-                    campaigns = client.campaign.list(search=campaign_name, first=1)
-                    if campaigns:
-                        campaign_id = campaigns[0].get("id")
-                        resolved_campaign_name = campaigns[0].get("name")
+                    self.logger.info(f"[DEBUG] Not an ID, searching for campaign by name: '{campaign_name}'")
+                    try:
+                        campaigns = client.campaign.list(search=campaign_name, first=1)
+                        self.logger.info(f"[DEBUG] campaign.list returned type: {type(campaigns)}, length: {len(campaigns) if campaigns else 0}")
+                        if campaigns:
+                            self.logger.info(f"[DEBUG] First campaign: {campaigns[0]}")
+                            campaign_id = campaigns[0].get("id")
+                            resolved_campaign_name = campaigns[0].get("name")
+                            self.logger.info(f"[DEBUG] Found campaign: id={campaign_id}, name={resolved_campaign_name}")
+                    except Exception as e:
+                        self.logger.warning(f"[DEBUG] campaign.list failed: {type(e).__name__}: {e}")
                 else:
                     campaign_id = campaign_name
+                    self.logger.info(f"[DEBUG] Input is already an ID: {campaign_id}")
 
                 if not campaign_id:
+                    self.logger.error(f"[DEBUG] No campaign found for '{campaign_name}'")
                     return {
                         "campaign_name": campaign_name,
                         "campaign_id": None,
