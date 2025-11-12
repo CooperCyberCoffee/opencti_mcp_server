@@ -12,6 +12,7 @@ For consulting and enterprise inquiries: business@coopercybercoffee.com
 import os
 import logging
 import re
+import sys
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 import structlog
@@ -33,6 +34,7 @@ def setup_logging(log_level: str = "INFO") -> structlog.BoundLogger:
     logging.basicConfig(
         format="%(message)s",
         level=getattr(logging, log_level.upper(), logging.INFO),
+        stream=sys.stderr  # CRITICAL: All logs must go to stderr for MCP protocol
     )
 
     structlog.configure(
