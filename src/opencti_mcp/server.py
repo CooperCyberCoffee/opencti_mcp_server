@@ -1135,13 +1135,13 @@ class OpenCTIMCPServer:
         """Handle get_entity_relationships tool.
 
         Args:
-            args: Tool arguments including entity_id, relationship_types, limit
+            args: Tool arguments including entity_id, relationship_type, limit
 
         Returns:
             List containing TextContent with formatted relationship graph
         """
         entity_id = args.get("entity_id", "")
-        relationship_types = args.get("relationship_types", ["all"])
+        relationship_type = args.get("relationship_type", "all")
         limit = args.get("limit", 50)
 
         if not entity_id:
@@ -1153,14 +1153,14 @@ class OpenCTIMCPServer:
         self.logger.info(
             "fetching_entity_relationships",
             entity_id=entity_id,
-            relationship_types=relationship_types,
+            relationship_type=relationship_type,
             limit=limit
         )
 
         # Fetch relationships from OpenCTI
         result = await self.opencti_client.get_entity_relationships(
             entity_id=entity_id,
-            relationship_types=relationship_types,
+            relationship_type=relationship_type if relationship_type != "all" else None,
             limit=limit
         )
 

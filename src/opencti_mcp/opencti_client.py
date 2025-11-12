@@ -614,13 +614,13 @@ class OpenCTIClient:
 
     async def get_threat_actor_ttps(
         self,
-        actor_identifier: str,
+        actor_name: str,
         limit: int = 50
     ) -> Dict[str, Any]:
         """Get attack patterns (TTPs) used by a threat actor or intrusion set.
 
         Args:
-            actor_identifier: Threat actor/intrusion set name or ID
+            actor_name: Threat actor/intrusion set name or ID
             limit: Maximum number of attack patterns to return
 
         Returns:
@@ -636,32 +636,32 @@ class OpenCTIClient:
             def _get_actor_ttps():
                 # First, search for the actor by name if not an ID
                 actor_id = None
-                actor_name = actor_identifier
+                resolved_actor_name = actor_name
 
-                if not actor_identifier.startswith("intrusion-set--") and not actor_identifier.startswith("threat-actor--"):
+                if not actor_name.startswith("intrusion-set--") and not actor_name.startswith("threat-actor--"):
                     # Search for threat actor or intrusion set
                     try:
-                        actors = client.intrusion_set.list(search=actor_identifier, first=1)
+                        actors = client.intrusion_set.list(search=actor_name, first=1)
                         if actors:
                             actor_id = actors[0].get("id")
-                            actor_name = actors[0].get("name")
+                            resolved_actor_name = actors[0].get("name")
                     except:
                         pass
 
                     if not actor_id:
                         try:
-                            actors = client.threat_actor.list(search=actor_identifier, first=1)
+                            actors = client.threat_actor.list(search=actor_name, first=1)
                             if actors:
                                 actor_id = actors[0].get("id")
-                                actor_name = actors[0].get("name")
+                                resolved_actor_name = actors[0].get("name")
                         except:
                             pass
                 else:
-                    actor_id = actor_identifier
+                    actor_id = actor_name
 
                 if not actor_id:
                     return {
-                        "actor_name": actor_identifier,
+                        "actor_name": actor_name,
                         "actor_id": None,
                         "found": False,
                         "attack_patterns": []
@@ -717,7 +717,7 @@ class OpenCTIClient:
 
                     if not data:
                         return {
-                            "actor_name": actor_name,
+                            "actor_name": resolved_actor_name,
                             "actor_id": actor_id,
                             "found": False,
                             "attack_patterns": []
@@ -741,7 +741,7 @@ class OpenCTIClient:
                         })
 
                     return {
-                        "actor_name": data.get("name", actor_name),
+                        "actor_name": data.get("name", resolved_actor_name),
                         "actor_id": actor_id,
                         "actor_description": data.get("description", ""),
                         "found": True,
@@ -751,7 +751,7 @@ class OpenCTIClient:
                 except Exception as e:
                     self.logger.warning(f"GraphQL query failed, falling back: {e}")
                     return {
-                        "actor_name": actor_name,
+                        "actor_name": resolved_actor_name,
                         "actor_id": actor_id,
                         "found": False,
                         "attack_patterns": [],
@@ -762,7 +762,7 @@ class OpenCTIClient:
                 self._executor, _get_actor_ttps
             )
 
-            self.logger.info(f"Retrieved {len(result.get('attack_patterns', []))} TTPs for {actor_identifier}")
+            self.logger.info(f"Retrieved {len(result.get('attack_patterns', []))} TTPs for {actor_name}")
             return result
 
         except Exception as e:
@@ -771,13 +771,13 @@ class OpenCTIClient:
 
     async def get_malware_techniques(
         self,
-        malware_identifier: str,
+        malware_name: str,
         limit: int = 50
     ) -> Dict[str, Any]:
         """Get attack patterns used by malware and associated threat actors.
 
         Args:
-            malware_identifier: Malware name or ID
+            malware_name: Malware name or ID
             limit: Maximum number of results to return
 
         Returns:
@@ -793,19 +793,19 @@ class OpenCTIClient:
             def _get_malware_techniques():
                 # Search for malware by name if not an ID
                 malware_id = None
-                malware_name = malware_identifier
+                resolved_malware_name = malware_name
 
-                if not malware_identifier.startswith("malware--"):
-                    malwares = client.malware.list(search=malware_identifier, first=1)
+                if not malware_name.startswith("malware--"):
+                    malwares = client.malware.list(search=malware_name, first=1)
                     if malwares:
                         malware_id = malwares[0].get("id")
-                        malware_name = malwares[0].get("name")
+                        resolved_malware_name = malwares[0].get("name")
                 else:
-                    malware_id = malware_identifier
+                    malware_id = malware_name
 
                 if not malware_id:
                     return {
-                        "malware_name": malware_identifier,
+                        "malware_name": malware_name,
                         "malware_id": None,
                         "found": False,
                         "attack_patterns": [],
@@ -843,7 +843,7 @@ class OpenCTIClient:
 
                     if not data:
                         return {
-                            "malware_name": malware_name,
+                            "malware_name": resolved_malware_name,
                             "malware_id": malware_id,
                             "found": False,
                             "attack_patterns": [],
@@ -868,7 +868,7 @@ class OpenCTIClient:
                         })
 
                     return {
-                        "malware_name": data.get("name", malware_name),
+                        "malware_name": data.get("name", resolved_malware_name),
                         "malware_id": malware_id,
                         "malware_description": data.get("description", ""),
                         "malware_types": data.get("malware_types", []),
@@ -880,7 +880,7 @@ class OpenCTIClient:
                 except Exception as e:
                     self.logger.warning(f"GraphQL query failed, falling back: {e}")
                     return {
-                        "malware_name": malware_name,
+                        "malware_name": resolved_malware_name,
                         "malware_id": malware_id,
                         "found": False,
                         "attack_patterns": [],
@@ -892,7 +892,7 @@ class OpenCTIClient:
                 self._executor, _get_malware_techniques
             )
 
-            self.logger.info(f"Retrieved {len(result.get('attack_patterns', []))} techniques for malware {malware_identifier}")
+            self.logger.info(f"Retrieved {len(result.get('attack_patterns', []))} techniques for malware {malware_name}")
             return result
 
         except Exception as e:
@@ -901,12 +901,12 @@ class OpenCTIClient:
 
     async def get_campaign_details(
         self,
-        campaign_identifier: str
+        campaign_name: str
     ) -> Dict[str, Any]:
         """Get comprehensive campaign details with full relationship graph.
 
         Args:
-            campaign_identifier: Campaign name or ID
+            campaign_name: Campaign name or ID
 
         Returns:
             Dictionary containing campaign details and all relationships
@@ -921,19 +921,19 @@ class OpenCTIClient:
             def _get_campaign_details():
                 # Search for campaign by name if not an ID
                 campaign_id = None
-                campaign_name = campaign_identifier
+                resolved_campaign_name = campaign_name
 
-                if not campaign_identifier.startswith("campaign--"):
-                    campaigns = client.campaign.list(search=campaign_identifier, first=1)
+                if not campaign_name.startswith("campaign--"):
+                    campaigns = client.campaign.list(search=campaign_name, first=1)
                     if campaigns:
                         campaign_id = campaigns[0].get("id")
-                        campaign_name = campaigns[0].get("name")
+                        resolved_campaign_name = campaigns[0].get("name")
                 else:
-                    campaign_id = campaign_identifier
+                    campaign_id = campaign_name
 
                 if not campaign_id:
                     return {
-                        "campaign_name": campaign_identifier,
+                        "campaign_name": campaign_name,
                         "campaign_id": None,
                         "found": False,
                         "threat_actors": [],
@@ -992,7 +992,7 @@ class OpenCTIClient:
                         })
 
                     return {
-                        "campaign_name": data.get("name", campaign_name),
+                        "campaign_name": data.get("name", resolved_campaign_name),
                         "campaign_id": campaign_id,
                         "campaign_description": data.get("description", ""),
                         "first_seen": data.get("first_seen"),
@@ -1007,7 +1007,7 @@ class OpenCTIClient:
                 except Exception as e:
                     self.logger.warning(f"GraphQL query failed: {e}")
                     return {
-                        "campaign_name": campaign_name,
+                        "campaign_name": resolved_campaign_name,
                         "campaign_id": campaign_id,
                         "found": False,
                         "threat_actors": [],
@@ -1021,7 +1021,7 @@ class OpenCTIClient:
                 self._executor, _get_campaign_details
             )
 
-            self.logger.info(f"Retrieved campaign details for {campaign_identifier}")
+            self.logger.info(f"Retrieved campaign details for {campaign_name}")
             return result
 
         except Exception as e:

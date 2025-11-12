@@ -49,7 +49,7 @@ def setup_logging(log_level: str = "INFO") -> structlog.BoundLogger:
             getattr(logging, log_level.upper(), logging.INFO)
         ),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),  # CRITICAL: Write to stderr for MCP
         cache_logger_on_first_use=False
     )
 
