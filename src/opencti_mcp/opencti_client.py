@@ -213,6 +213,178 @@ class OpenCTIClient:
         if self.debug:
             self.logger.info(f"[DEBUG] Cached: {cache_key}")
 
+    async def _resolve_entity(
+        self,
+        name: str,
+        entity_types: List[str],
+        id_prefixes: Optional[List[str]] = None,
+        cache_prefix: str = "entity"
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Universal entity resolution for any OpenCTI entity type.
+
+        Handles all input formats:
+        - Plain UUIDs (36 chars, 4 dashes): a777e02b-8a27-458f-8ed3-4b26bcfce87d
+        - Prefixed IDs: malware--abc123, intrusion-set--xyz789
+        - Entity names: APT28, Emotet, SolarWinds Compromise
+        - Aliases: Fancy Bear, Feodo, SUNBURST
+        - MITRE IDs: G0007, S0154, T1566.001
+
+        Args:
+            name: Entity name, UUID, MITRE ID, or prefixed ID
+            entity_types: OpenCTI entity types (e.g., ['Malware'], ['Intrusion-Set', 'Threat-Actor'])
+            id_prefixes: Expected ID prefixes (e.g., ['malware--', 'malware-family--'])
+            cache_prefix: Prefix for cache key (e.g., 'malware', 'campaign')
+
+        Returns:
+            Tuple of (entity_id, entity_type) or (None, None) if not found
+
+        Example:
+            >>> entity_id, entity_type = await self._resolve_entity(
+            ...     name="Emotet",
+            ...     entity_types=['Malware'],
+            ...     id_prefixes=['malware--'],
+            ...     cache_prefix='malware'
+            ... )
+        """
+        import traceback
+
+        if self.debug:
+            self.logger.info(f"[RESOLVE_ENTITY] === Starting resolution ===")
+            self.logger.info(f"[RESOLVE_ENTITY] Input: '{name}'")
+            self.logger.info(f"[RESOLVE_ENTITY] Entity types: {entity_types}")
+            self.logger.info(f"[RESOLVE_ENTITY] Input length: {len(name)}, Dashes: {name.count('-')}")
+
+        # Check if it's a prefixed ID
+        if id_prefixes:
+            for prefix in id_prefixes:
+                if name.startswith(prefix):
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE_ENTITY] ✓ Input has {prefix} prefix")
+                    return (name, entity_types[0].lower().replace(' ', '-').replace('_', '-'))
+
+        # Check if it's a plain UUID (OpenCTI 6.x format)
+        # Format: a777e02b-8a27-458f-8ed3-4b26bcfce87d (36 chars, 4 dashes)
+        if len(name) == 36 and name.count('-') == 4:
+            if self.debug:
+                self.logger.info(f"[RESOLVE_ENTITY] Detected plain UUID format: {name}")
+
+            client = await self._get_client()
+
+            # Try to verify UUID exists for each entity type
+            for entity_type in entity_types:
+                try:
+                    entity_type_lower = entity_type.lower().replace('-', '_').replace(' ', '_')
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE_ENTITY] Attempting {entity_type}.read(id={name})")
+
+                    # Map entity type to client method
+                    if hasattr(client, entity_type_lower):
+                        entity_client = getattr(client, entity_type_lower)
+                        test = entity_client.read(id=name)
+                        if test:
+                            normalized_type = entity_type.lower().replace(' ', '-').replace('_', '-')
+                            if self.debug:
+                                self.logger.info(f"[RESOLVE_ENTITY] ✓ Verified as {entity_type}: {test.get('name', 'N/A')}")
+                            return (name, normalized_type)
+                except Exception as e:
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE_ENTITY] Not a {entity_type}: {e}")
+
+            # If we can't verify but it looks like a UUID, assume first entity type
+            if self.debug:
+                self.logger.info(f"[RESOLVE_ENTITY] Assuming UUID is {entity_types[0]}")
+            return (name, entity_types[0].lower().replace(' ', '-').replace('_', '-'))
+
+        # Check cache
+        cache_key = f"{cache_prefix}:{name.lower()}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            if self.debug:
+                self.logger.info(f"[RESOLVE_ENTITY] ✓ Cache hit: {cached}")
+            return cached
+
+        if self.debug:
+            self.logger.info(f"[RESOLVE_ENTITY] Not in cache, using search_entities")
+
+        # Use search_entities (we know it works reliably!)
+        try:
+            if self.debug:
+                self.logger.info(f"[RESOLVE_ENTITY] Calling search_entities('{name}', {entity_types})")
+
+            search_results = await self.search_entities(
+                search_term=name,
+                entity_types=entity_types,
+                limit=10
+            )
+
+            if self.debug:
+                self.logger.info(f"[RESOLVE_ENTITY] search_entities returned {len(search_results)} results")
+
+            if search_results and len(search_results) > 0:
+                # Priority 1: Exact name match (case-insensitive)
+                for result in search_results:
+                    if result.get('name', '').lower() == name.lower():
+                        entity_id = result.get('id')
+                        entity_type = result.get('entity_type', entity_types[0])
+                        entity_type_normalized = entity_type.lower().replace(' ', '-').replace('_', '-')
+                        if self.debug:
+                            self.logger.info(f"[RESOLVE_ENTITY] ✓ Exact match: {result.get('name')} ({entity_id})")
+                        result_tuple = (entity_id, entity_type_normalized)
+                        self._set_cached(cache_key, result_tuple)
+                        return result_tuple
+
+                # Priority 2: Alias match
+                for result in search_results:
+                    aliases = result.get('aliases', []) or []
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE_ENTITY] Checking aliases for {result.get('name')}: {aliases}")
+                    if any(alias.lower() == name.lower() for alias in aliases):
+                        entity_id = result.get('id')
+                        entity_type = result.get('entity_type', entity_types[0])
+                        entity_type_normalized = entity_type.lower().replace(' ', '-').replace('_', '-')
+                        if self.debug:
+                            self.logger.info(f"[RESOLVE_ENTITY] ✓ Alias match: {result.get('name')} ({entity_id})")
+                        result_tuple = (entity_id, entity_type_normalized)
+                        self._set_cached(cache_key, result_tuple)
+                        return result_tuple
+
+                # Priority 3: MITRE ID match
+                for result in search_results:
+                    mitre_id = result.get('mitre_id', '')
+                    if self.debug and mitre_id:
+                        self.logger.info(f"[RESOLVE_ENTITY] {result.get('name')} MITRE ID: {mitre_id}")
+                    if mitre_id and mitre_id.upper() == name.upper():
+                        entity_id = result.get('id')
+                        entity_type = result.get('entity_type', entity_types[0])
+                        entity_type_normalized = entity_type.lower().replace(' ', '-').replace('_', '-')
+                        if self.debug:
+                            self.logger.info(f"[RESOLVE_ENTITY] ✓ MITRE ID match: {result.get('name')} ({entity_id})")
+                        result_tuple = (entity_id, entity_type_normalized)
+                        self._set_cached(cache_key, result_tuple)
+                        return result_tuple
+
+                # Priority 4: Fuzzy match (first result)
+                entity_id = search_results[0].get('id')
+                entity_name = search_results[0].get('name')
+                entity_type = search_results[0].get('entity_type', entity_types[0])
+                entity_type_normalized = entity_type.lower().replace(' ', '-').replace('_', '-')
+                if self.debug:
+                    self.logger.info(f"[RESOLVE_ENTITY] ✓ Fuzzy match: {entity_name} ({entity_id})")
+                result_tuple = (entity_id, entity_type_normalized)
+                self._set_cached(cache_key, result_tuple)
+                return result_tuple
+
+        except Exception as e:
+            if self.debug:
+                self.logger.error(f"[RESOLVE_ENTITY] search_entities failed:")
+                self.logger.error(f"[RESOLVE_ENTITY] Error: {str(e)}")
+                self.logger.error(f"[RESOLVE_ENTITY] Traceback:\n{traceback.format_exc()}")
+
+        if self.debug:
+            self.logger.error(f"[RESOLVE_ENTITY] ✗ Resolution FAILED for '{name}'")
+
+        return (None, None)
+
     async def _resolve_threat_actor(self, name: str) -> Tuple[Optional[str], Optional[str]]:
         """Resolve threat actor by name, alias, MITRE ID, or entity ID.
 
@@ -468,130 +640,45 @@ class OpenCTIClient:
     async def _resolve_malware(self, name: str) -> Tuple[Optional[str], Optional[str]]:
         """Resolve malware by name, alias, or entity ID.
 
+        TEST CASES THAT MUST WORK:
+        1. _resolve_malware("Emotet") → should find entity
+        2. _resolve_malware("dcbbf768-e5a9-4d6a-...") → should work with UUID
+        3. _resolve_malware("Feodo") → should find via alias
+        4. _resolve_malware("S0154") → should find via MITRE ID
+
         Args:
-            name: Malware name, alias, or entity ID
+            name: Malware name, alias, MITRE ID, or entity ID
 
         Returns:
             Tuple of (entity_id, 'malware') or (None, None) if not found
         """
-        # Quick path: Already an entity ID
-        if name.startswith('malware--'):
-            return (name, 'malware')
-
-        # Check cache
-        cache_key = f"malware:{name.lower()}"
-        cached = self._get_cached(cache_key)
-        if cached:
-            return cached
-
-        if self.debug:
-            self.logger.info(f"[DEBUG] Resolving malware: '{name}'")
-
-        client = await self._get_client()
-
-        def _search_and_match():
-            try:
-                malwares = client.malware.list(search=name, first=10)
-
-                if malwares:
-                    # Priority 1: Exact name match
-                    for malware in malwares:
-                        if malware.get('name', '').lower() == name.lower():
-                            if self.debug:
-                                self.logger.info(f"[DEBUG] Found exact match: {malware.get('name')}")
-                            return (malware['id'], 'malware')
-
-                    # Priority 2: Alias match
-                    for malware in malwares:
-                        aliases = malware.get('aliases', []) or []
-                        if any(alias.lower() == name.lower() for alias in aliases):
-                            if self.debug:
-                                self.logger.info(f"[DEBUG] Found alias match in: {malware.get('name')}")
-                            return (malware['id'], 'malware')
-
-                    # Priority 3: Fuzzy match
-                    if self.debug:
-                        self.logger.info(f"[DEBUG] Using fuzzy match: {malwares[0].get('name')}")
-                    return (malwares[0]['id'], 'malware')
-
-            except Exception as e:
-                if self.debug:
-                    self.logger.warning(f"[DEBUG] Malware search failed: {e}")
-
-            return (None, None)
-
-        result = await asyncio.get_event_loop().run_in_executor(
-            self._executor, _search_and_match
+        return await self._resolve_entity(
+            name=name,
+            entity_types=['Malware'],
+            id_prefixes=['malware--'],
+            cache_prefix='malware'
         )
 
-        if result[0]:
-            self._set_cached(cache_key, result)
-
-        return result
-
     async def _resolve_campaign(self, name: str) -> Tuple[Optional[str], Optional[str]]:
-        """Resolve campaign by name or entity ID.
+        """Resolve campaign by name, alias, or entity ID.
+
+        TEST CASES THAT MUST WORK:
+        1. _resolve_campaign("SolarWinds Compromise") → should find entity
+        2. _resolve_campaign("campaign-uuid-here") → should work with UUID
+        3. _resolve_campaign("SUNBURST") → should find via alias
 
         Args:
-            name: Campaign name or entity ID
+            name: Campaign name, alias, or entity ID
 
         Returns:
             Tuple of (entity_id, 'campaign') or (None, None) if not found
         """
-        # Quick path: Already an entity ID
-        if name.startswith('campaign--'):
-            return (name, 'campaign')
-
-        # Check cache
-        cache_key = f"campaign:{name.lower()}"
-        cached = self._get_cached(cache_key)
-        if cached:
-            return cached
-
-        if self.debug:
-            self.logger.info(f"[DEBUG] Resolving campaign: '{name}'")
-
-        client = await self._get_client()
-
-        def _search_and_match():
-            try:
-                campaigns = client.campaign.list(search=name, first=10)
-
-                if campaigns:
-                    # Priority 1: Exact name match
-                    for campaign in campaigns:
-                        if campaign.get('name', '').lower() == name.lower():
-                            if self.debug:
-                                self.logger.info(f"[DEBUG] Found exact match: {campaign.get('name')}")
-                            return (campaign['id'], 'campaign')
-
-                    # Priority 2: Alias match
-                    for campaign in campaigns:
-                        aliases = campaign.get('aliases', []) or []
-                        if any(alias.lower() == name.lower() for alias in aliases):
-                            if self.debug:
-                                self.logger.info(f"[DEBUG] Found alias match in: {campaign.get('name')}")
-                            return (campaign['id'], 'campaign')
-
-                    # Priority 3: Fuzzy match
-                    if self.debug:
-                        self.logger.info(f"[DEBUG] Using fuzzy match: {campaigns[0].get('name')}")
-                    return (campaigns[0]['id'], 'campaign')
-
-            except Exception as e:
-                if self.debug:
-                    self.logger.warning(f"[DEBUG] Campaign search failed: {e}")
-
-            return (None, None)
-
-        result = await asyncio.get_event_loop().run_in_executor(
-            self._executor, _search_and_match
+        return await self._resolve_entity(
+            name=name,
+            entity_types=['Campaign'],
+            id_prefixes=['campaign--'],
+            cache_prefix='campaign'
         )
-
-        if result[0]:
-            self._set_cached(cache_key, result)
-
-        return result
 
     async def get_recent_indicators(
         self,
