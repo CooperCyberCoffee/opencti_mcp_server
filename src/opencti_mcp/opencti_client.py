@@ -1017,7 +1017,7 @@ class OpenCTIClient:
                     if not data:
                         self.logger.warning(f"[DEBUG] No stixDomainObject data returned for id: {actor_id}")
                         return {
-                            "actor_name": resolved_actor_name,
+                            "actor_name": actor_name,
                             "actor_id": actor_id,
                             "found": False,
                             "attack_patterns": []
@@ -1044,7 +1044,7 @@ class OpenCTIClient:
                         })
 
                     return {
-                        "actor_name": data.get("name", resolved_actor_name),
+                        "actor_name": data.get("name", actor_name),
                         "actor_id": actor_id,
                         "actor_description": data.get("description", ""),
                         "found": True,
@@ -1054,7 +1054,7 @@ class OpenCTIClient:
                 except Exception as e:
                     self.logger.warning(f"GraphQL query failed, falling back: {e}")
                     return {
-                        "actor_name": resolved_actor_name,
+                        "actor_name": actor_name,
                         "actor_id": actor_id,
                         "found": False,
                         "attack_patterns": [],
@@ -1160,7 +1160,7 @@ class OpenCTIClient:
                     if not data:
                         self.logger.warning(f"[DEBUG] No malware data returned for id: {malware_id}")
                         return {
-                            "malware_name": resolved_malware_name,
+                            "malware_name": malware_name,
                             "malware_id": malware_id,
                             "found": False,
                             "attack_patterns": [],
@@ -1188,7 +1188,7 @@ class OpenCTIClient:
                         })
 
                     return {
-                        "malware_name": data.get("name", resolved_malware_name),
+                        "malware_name": data.get("name", malware_name),
                         "malware_id": malware_id,
                         "malware_description": data.get("description", ""),
                         "malware_types": data.get("malware_types", []),
@@ -1200,7 +1200,7 @@ class OpenCTIClient:
                 except Exception as e:
                     self.logger.warning(f"GraphQL query failed, falling back: {e}")
                     return {
-                        "malware_name": resolved_malware_name,
+                        "malware_name": malware_name,
                         "malware_id": malware_id,
                         "found": False,
                         "attack_patterns": [],
@@ -1319,7 +1319,7 @@ class OpenCTIClient:
                         })
 
                     return {
-                        "campaign_name": data.get("name", resolved_campaign_name),
+                        "campaign_name": data.get("name", campaign_name),
                         "campaign_id": campaign_id,
                         "campaign_description": data.get("description", ""),
                         "first_seen": data.get("first_seen"),
@@ -1334,7 +1334,7 @@ class OpenCTIClient:
                 except Exception as e:
                     self.logger.warning(f"GraphQL query failed: {e}")
                     return {
-                        "campaign_name": resolved_campaign_name,
+                        "campaign_name": campaign_name,
                         "campaign_id": campaign_id,
                         "found": False,
                         "threat_actors": [],
