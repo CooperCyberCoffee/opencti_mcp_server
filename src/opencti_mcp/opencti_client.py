@@ -1308,9 +1308,10 @@ class OpenCTIClient:
 
                     # Extract attack patterns
                     patterns = []
-                    attack_patterns_data = data.get("attackPatterns", {}).get("edges", [])
+                    attack_patterns_data = data.get("attackPatterns", {})
+                    edges = attack_patterns_data.get("edges", []) if attack_patterns_data else []
 
-                    for edge in attack_patterns_data:
+                    for edge in edges:
                         node = edge.get("node", {})
                         patterns.append({
                             "id": node.get("id"),
@@ -1433,7 +1434,8 @@ class OpenCTIClient:
                     entity_type = data.get("entity_type", "Unknown")
 
                     relationships = []
-                    edges = data.get("stixCoreRelationships", {}).get("edges", [])
+                    relationships_data = data.get("stixCoreRelationships", {})
+                    edges = relationships_data.get("edges", []) if relationships_data else []
 
                     for edge in edges[:limit]:
                         node = edge.get("node", {})
