@@ -1033,7 +1033,7 @@ class OpenCTIClient:
         entity_id: str,
         relationship_type: Optional[str] = None,
         limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """Get relationships for any entity type.
 
         Args:
@@ -1042,7 +1042,7 @@ class OpenCTIClient:
             limit: Maximum number of relationships to return
 
         Returns:
-            List of related entities with relationship info
+            Dictionary containing entity info and list of related entities
 
         Example:
             >>> rels = await client.get_entity_relationships(
@@ -1055,13 +1055,14 @@ class OpenCTIClient:
 
             def _get_relationships():
                 try:
-                    # Use GraphQL to query relationships
+                    # Use GraphQL to query relationships with target entity details
                     query = """
                         query GetEntityRelationships($id: String!) {
                             stixDomainObject(id: $id) {
                                 id
                                 entity_type
                                 ... on StixDomainObject {
+                                    name
                                     stixCoreRelationships {
                                         edges {
                                             node {
@@ -1072,11 +1073,19 @@ class OpenCTIClient:
                                                         id
                                                         entity_type
                                                     }
+                                                    ... on StixDomainObject {
+                                                        name
+                                                        description
+                                                    }
                                                 }
                                                 to {
                                                     ... on BasicObject {
                                                         id
                                                         entity_type
+                                                    }
+                                                    ... on StixDomainObject {
+                                                        name
+                                                        description
                                                     }
                                                 }
                                             }
@@ -1091,7 +1100,10 @@ class OpenCTIClient:
                     data = result.get("data", {}).get("stixDomainObject", {})
 
                     if not data:
-                        return []
+                        return None
+
+                    entity_name = data.get("name", "Unknown")
+                    entity_type = data.get("entity_type", "Unknown")
 
                     relationships = []
                     edges = data.get("stixCoreRelationships", {}).get("edges", [])
@@ -1107,26 +1119,37 @@ class OpenCTIClient:
                         from_entity = node.get("from", {})
                         to_entity = node.get("to", {})
 
+                        # Determine target entity (the one that's not the source entity)
+                        target = to_entity if from_entity.get("id") == entity_id else from_entity
+
                         relationships.append({
                             "relationship_id": node.get("id"),
                             "relationship_type": rel_type,
-                            "from_id": from_entity.get("id"),
-                            "from_type": from_entity.get("entity_type"),
-                            "to_id": to_entity.get("id"),
-                            "to_type": to_entity.get("entity_type")
+                            "target": {
+                                "id": target.get("id"),
+                                "entity_type": target.get("entity_type", "Unknown"),
+                                "name": target.get("name", "Unknown"),
+                                "description": target.get("description", "")
+                            }
                         })
 
-                    return relationships
+                    return {
+                        "entity_id": entity_id,
+                        "entity_name": entity_name,
+                        "entity_type": entity_type,
+                        "relationships": relationships
+                    }
 
                 except Exception as e:
                     self.logger.warning(f"GraphQL relationship query failed: {e}")
-                    return []
+                    return None
 
             result = await asyncio.get_event_loop().run_in_executor(
                 self._executor, _get_relationships
             )
 
-            self.logger.info(f"Retrieved {len(result)} relationships for {entity_id}")
+            if result:
+                self.logger.info(f"Retrieved {len(result.get('relationships', []))} relationships for {entity_id}")
             return result
 
         except Exception as e:
