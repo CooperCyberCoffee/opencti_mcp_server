@@ -42,8 +42,11 @@ class OpenCTIClient:
         'ready'
     """
 
-    def __init__(self, url: str, token: str, ssl_verify: bool = False, debug: bool = False):
-        """Initialize OpenCTI client with connection parameters."""
+    def __init__(self, url: str, token: str, ssl_verify: bool = False, debug: bool = True):
+        """Initialize OpenCTI client with connection parameters.
+
+        Note: debug=True by default for testing. Set to False in production.
+        """
         self.url = url
         self.token = token
         self.ssl_verify = ssl_verify
@@ -51,6 +54,17 @@ class OpenCTIClient:
         self._client = None
         self._executor = ThreadPoolExecutor(max_workers=4)
         self.logger = logging.getLogger(__name__)
+
+        # Enable debug logging if requested
+        if self.debug:
+            self.logger.setLevel(logging.DEBUG)
+            # Ensure handler exists and is configured
+            if not self.logger.handlers:
+                handler = logging.StreamHandler()
+                handler.setLevel(logging.DEBUG)
+                formatter = logging.Formatter('[%(levelname)s] %(message)s')
+                handler.setFormatter(formatter)
+                self.logger.addHandler(handler)
 
         # Simple cache for entity resolution (prevents redundant lookups)
         self._entity_cache = {}
@@ -202,118 +216,252 @@ class OpenCTIClient:
     async def _resolve_threat_actor(self, name: str) -> Tuple[Optional[str], Optional[str]]:
         """Resolve threat actor by name, alias, MITRE ID, or entity ID.
 
-        This implements robust two-step resolution:
-        1. Check if already an entity ID → return immediately
-        2. Search by exact name → check aliases → check MITRE ID → fuzzy match
+        TEST CASES THAT MUST WORK:
+        1. _resolve_threat_actor("APT28") → should find entity
+        2. _resolve_threat_actor("a777e02b-8a27-458f-8ed3-4b26bcfce87d") → should work with UUID
+        3. _resolve_threat_actor("Fancy Bear") → should find via alias
+        4. _resolve_threat_actor("G0007") → should find via MITRE ID
 
         Args:
             name: Threat actor name, alias, MITRE ID (e.g., "G0007"), or entity ID
 
         Returns:
             Tuple of (entity_id, entity_type) or (None, None) if not found
-
-        Example:
-            >>> entity_id, entity_type = await self._resolve_threat_actor("APT28")
-            >>> entity_id, entity_type = await self._resolve_threat_actor("Fancy Bear")
-            >>> entity_id, entity_type = await self._resolve_threat_actor("G0007")
         """
-        # Quick path: Already an entity ID
+        import traceback
+
+        if self.debug:
+            self.logger.info(f"[RESOLVE] === Starting resolution for: '{name}' ===")
+            self.logger.info(f"[RESOLVE] Input length: {len(name)}")
+            self.logger.info(f"[RESOLVE] Dash count: {name.count('-')}")
+
+        # Quick path: Already an entity ID with prefix
         if name.startswith('intrusion-set--'):
+            if self.debug:
+                self.logger.info(f"[RESOLVE] Input has intrusion-set-- prefix")
             return (name, 'intrusion-set')
         if name.startswith('threat-actor--'):
+            if self.debug:
+                self.logger.info(f"[RESOLVE] Input has threat-actor-- prefix")
             return (name, 'threat-actor')
+
+        # Check if it's a plain UUID (OpenCTI 6.x format)
+        # Format: a777e02b-8a27-458f-8ed3-4b26bcfce87d (36 chars, 4 dashes)
+        if len(name) == 36 and name.count('-') == 4:
+            if self.debug:
+                self.logger.info(f"[RESOLVE] Input is plain UUID format: {name}")
+
+            client = await self._get_client()
+
+            # Try intrusion-set first (most common)
+            try:
+                if self.debug:
+                    self.logger.info(f"[RESOLVE] Attempting intrusion_set.read(id={name})")
+                test = client.intrusion_set.read(id=name)
+                if test:
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE] ✓ Verified as intrusion-set: {test.get('name')}")
+                    return (name, 'intrusion-set')
+            except Exception as e:
+                if self.debug:
+                    self.logger.info(f"[RESOLVE] Not an intrusion-set: {e}")
+
+            # Try threat-actor
+            try:
+                if self.debug:
+                    self.logger.info(f"[RESOLVE] Attempting threat_actor.read(id={name})")
+                test = client.threat_actor.read(id=name)
+                if test:
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE] ✓ Verified as threat-actor: {test.get('name')}")
+                    return (name, 'threat-actor')
+            except Exception as e:
+                if self.debug:
+                    self.logger.info(f"[RESOLVE] Not a threat-actor: {e}")
+
+            # If we can't verify but it looks like a UUID, assume intrusion-set
+            if self.debug:
+                self.logger.info(f"[RESOLVE] Assuming UUID is intrusion-set")
+            return (name, 'intrusion-set')
 
         # Check cache
         cache_key = f"threat_actor:{name.lower()}"
         cached = self._get_cached(cache_key)
         if cached:
+            if self.debug:
+                self.logger.info(f"[RESOLVE] ✓ Cache hit: {cached}")
             return cached
 
         if self.debug:
-            self.logger.info(f"[DEBUG] Resolving threat actor: '{name}'")
+            self.logger.info(f"[RESOLVE] Not in cache, proceeding with search")
 
         client = await self._get_client()
 
         def _search_and_match():
+            if self.debug:
+                self.logger.info(f"[RESOLVE] === Starting _search_and_match ===")
+
             # Try intrusion sets first (most common for APT groups)
             try:
                 if self.debug:
-                    self.logger.info(f"[DEBUG] Searching intrusion sets for: '{name}'")
+                    self.logger.info(f"[RESOLVE] Calling client.intrusion_set.list(search='{name}', first=10)")
 
                 intrusion_sets = client.intrusion_set.list(search=name, first=10)
 
+                # Null safety check
+                if intrusion_sets is None:
+                    if self.debug:
+                        self.logger.warning(f"[RESOLVE] intrusion_set.list() returned None")
+                    intrusion_sets = []
+
+                if self.debug:
+                    self.logger.info(f"[RESOLVE] Intrusion set search returned: {type(intrusion_sets)}")
+                    self.logger.info(f"[RESOLVE] Result count: {len(intrusion_sets)}")
+                    if intrusion_sets:
+                        self.logger.info(f"[RESOLVE] First result: {intrusion_sets[0].get('name', 'NO NAME')} (id: {intrusion_sets[0].get('id', 'NO ID')})")
+
                 if intrusion_sets:
                     # Priority 1: Exact name match (case-insensitive)
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE] Checking for exact name match...")
                     for iset in intrusion_sets:
                         if iset.get('name', '').lower() == name.lower():
                             if self.debug:
-                                self.logger.info(f"[DEBUG] Found exact name match: {iset.get('name')}")
+                                self.logger.info(f"[RESOLVE] ✓ Found exact name match: {iset.get('name')}")
                             return (iset['id'], 'intrusion-set')
 
                     # Priority 2: Alias match
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE] Checking for alias match...")
                     for iset in intrusion_sets:
                         aliases = iset.get('aliases', []) or []
+                        if self.debug:
+                            self.logger.info(f"[RESOLVE] {iset.get('name')} aliases: {aliases}")
                         if any(alias.lower() == name.lower() for alias in aliases):
                             if self.debug:
-                                self.logger.info(f"[DEBUG] Found alias match in: {iset.get('name')}")
+                                self.logger.info(f"[RESOLVE] ✓ Found alias match in: {iset.get('name')}")
                             return (iset['id'], 'intrusion-set')
 
                     # Priority 3: MITRE ID match
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE] Checking for MITRE ID match...")
                     for iset in intrusion_sets:
                         mitre_id = iset.get('x_mitre_id', '')
+                        if self.debug:
+                            self.logger.info(f"[RESOLVE] {iset.get('name')} MITRE ID: {mitre_id}")
                         if mitre_id and mitre_id.upper() == name.upper():
                             if self.debug:
-                                self.logger.info(f"[DEBUG] Found MITRE ID match: {mitre_id}")
+                                self.logger.info(f"[RESOLVE] ✓ Found MITRE ID match: {mitre_id}")
                             return (iset['id'], 'intrusion-set')
 
                     # Priority 4: Fuzzy match (first result from search)
                     if self.debug:
-                        self.logger.info(f"[DEBUG] Using fuzzy match: {intrusion_sets[0].get('name')}")
+                        self.logger.info(f"[RESOLVE] ✓ Using fuzzy match: {intrusion_sets[0].get('name')}")
                     return (intrusion_sets[0]['id'], 'intrusion-set')
+                else:
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE] No intrusion sets found")
 
             except Exception as e:
                 if self.debug:
-                    self.logger.warning(f"[DEBUG] Intrusion set search failed: {e}")
+                    self.logger.error(f"[RESOLVE] Exception in intrusion set search:")
+                    self.logger.error(f"[RESOLVE] Error: {str(e)}")
+                    self.logger.error(f"[RESOLVE] Traceback:\n{traceback.format_exc()}")
 
             # Try threat actors as fallback
             try:
                 if self.debug:
-                    self.logger.info(f"[DEBUG] Searching threat actors for: '{name}'")
+                    self.logger.info(f"[RESOLVE] Calling client.threat_actor.list(search='{name}', first=10)")
 
                 threat_actors = client.threat_actor.list(search=name, first=10)
+
+                # Null safety check
+                if threat_actors is None:
+                    if self.debug:
+                        self.logger.warning(f"[RESOLVE] threat_actor.list() returned None")
+                    threat_actors = []
+
+                if self.debug:
+                    self.logger.info(f"[RESOLVE] Threat actor search returned: {type(threat_actors)}")
+                    self.logger.info(f"[RESOLVE] Result count: {len(threat_actors)}")
+                    if threat_actors:
+                        self.logger.info(f"[RESOLVE] First result: {threat_actors[0].get('name', 'NO NAME')}")
 
                 if threat_actors:
                     # Same priority matching as above
                     for actor in threat_actors:
                         if actor.get('name', '').lower() == name.lower():
                             if self.debug:
-                                self.logger.info(f"[DEBUG] Found exact name match: {actor.get('name')}")
+                                self.logger.info(f"[RESOLVE] ✓ Found exact name match: {actor.get('name')}")
                             return (actor['id'], 'threat-actor')
 
                     for actor in threat_actors:
                         aliases = actor.get('aliases', []) or []
                         if any(alias.lower() == name.lower() for alias in aliases):
                             if self.debug:
-                                self.logger.info(f"[DEBUG] Found alias match in: {actor.get('name')}")
+                                self.logger.info(f"[RESOLVE] ✓ Found alias match in: {actor.get('name')}")
                             return (actor['id'], 'threat-actor')
 
                     if self.debug:
-                        self.logger.info(f"[DEBUG] Using fuzzy match: {threat_actors[0].get('name')}")
+                        self.logger.info(f"[RESOLVE] ✓ Using fuzzy match: {threat_actors[0].get('name')}")
                     return (threat_actors[0]['id'], 'threat-actor')
 
             except Exception as e:
                 if self.debug:
-                    self.logger.warning(f"[DEBUG] Threat actor search failed: {e}")
+                    self.logger.error(f"[RESOLVE] Exception in threat actor search:")
+                    self.logger.error(f"[RESOLVE] Error: {str(e)}")
+                    self.logger.error(f"[RESOLVE] Traceback:\n{traceback.format_exc()}")
 
+            if self.debug:
+                self.logger.error(f"[RESOLVE] ✗ Standard search failed completely")
             return (None, None)
 
         result = await asyncio.get_event_loop().run_in_executor(
             self._executor, _search_and_match
         )
 
+        # If standard search failed, try search_entities approach (we know it works!)
+        if result[0] is None:
+            if self.debug:
+                self.logger.info(f"[RESOLVE] Standard search failed, trying search_entities approach")
+
+            try:
+                search_results = await self.search_entities(
+                    search_term=name,
+                    entity_types=['Intrusion-Set', 'Threat-Actor'],
+                    limit=5
+                )
+
+                if self.debug:
+                    self.logger.info(f"[RESOLVE] search_entities returned {len(search_results)} results")
+
+                if search_results and len(search_results) > 0:
+                    entity_id = search_results[0].get('id')
+                    entity_name = search_results[0].get('name')
+                    entity_type_raw = search_results[0].get('entity_type', 'Intrusion-Set')
+
+                    # Map entity type to lowercase with dash
+                    entity_type = 'intrusion-set' if 'intrusion' in entity_type_raw.lower() else 'threat-actor'
+
+                    if self.debug:
+                        self.logger.info(f"[RESOLVE] ✓ search_entities found: {entity_name} (id: {entity_id}, type: {entity_type})")
+
+                    result = (entity_id, entity_type)
+
+            except Exception as e:
+                if self.debug:
+                    self.logger.error(f"[RESOLVE] search_entities approach failed:")
+                    self.logger.error(f"[RESOLVE] Error: {str(e)}")
+                    self.logger.error(f"[RESOLVE] Traceback:\n{traceback.format_exc()}")
+
         # Cache the result
         if result[0]:
             self._set_cached(cache_key, result)
+            if self.debug:
+                self.logger.info(f"[RESOLVE] === Resolution successful: {result} ===")
+        else:
+            if self.debug:
+                self.logger.error(f"[RESOLVE] === Resolution FAILED for '{name}' ===")
 
         return result
 
