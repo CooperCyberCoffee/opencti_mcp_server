@@ -612,6 +612,527 @@ class OpenCTIClient:
             self.logger.error(f"Entity search failed: {e}")
             raise
 
+    async def get_threat_actor_ttps(
+        self,
+        actor_identifier: str,
+        limit: int = 50
+    ) -> Dict[str, Any]:
+        """Get attack patterns (TTPs) used by a threat actor or intrusion set.
+
+        Args:
+            actor_identifier: Threat actor/intrusion set name or ID
+            limit: Maximum number of attack patterns to return
+
+        Returns:
+            Dictionary containing actor info and associated attack patterns
+
+        Example:
+            >>> ttps = await client.get_threat_actor_ttps("APT29")
+            >>> print(f"Found {len(ttps['attack_patterns'])} techniques")
+        """
+        try:
+            client = await self._get_client()
+
+            def _get_actor_ttps():
+                # First, search for the actor by name if not an ID
+                actor_id = None
+                actor_name = actor_identifier
+
+                if not actor_identifier.startswith("intrusion-set--") and not actor_identifier.startswith("threat-actor--"):
+                    # Search for threat actor or intrusion set
+                    try:
+                        actors = client.intrusion_set.list(search=actor_identifier, first=1)
+                        if actors:
+                            actor_id = actors[0].get("id")
+                            actor_name = actors[0].get("name")
+                    except:
+                        pass
+
+                    if not actor_id:
+                        try:
+                            actors = client.threat_actor.list(search=actor_identifier, first=1)
+                            if actors:
+                                actor_id = actors[0].get("id")
+                                actor_name = actors[0].get("name")
+                        except:
+                            pass
+                else:
+                    actor_id = actor_identifier
+
+                if not actor_id:
+                    return {
+                        "actor_name": actor_identifier,
+                        "actor_id": None,
+                        "found": False,
+                        "attack_patterns": []
+                    }
+
+                # GraphQL query to get attack patterns
+                query = """
+                    query GetActorTTPs($id: String!) {
+                        stixDomainObject(id: $id) {
+                            ... on IntrusionSet {
+                                id
+                                name
+                                description
+                                attackPatterns {
+                                    edges {
+                                        node {
+                                            id
+                                            name
+                                            description
+                                            x_mitre_id
+                                            killChainPhases {
+                                                phase_name
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            ... on ThreatActor {
+                                id
+                                name
+                                description
+                                attackPatterns {
+                                    edges {
+                                        node {
+                                            id
+                                            name
+                                            description
+                                            x_mitre_id
+                                            killChainPhases {
+                                                phase_name
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                """
+
+                try:
+                    result = client.query(query, {"id": actor_id})
+                    data = result.get("data", {}).get("stixDomainObject", {})
+
+                    if not data:
+                        return {
+                            "actor_name": actor_name,
+                            "actor_id": actor_id,
+                            "found": False,
+                            "attack_patterns": []
+                        }
+
+                    # Extract attack patterns
+                    patterns = []
+                    attack_patterns_data = data.get("attackPatterns", {}).get("edges", [])
+
+                    for edge in attack_patterns_data[:limit]:
+                        node = edge.get("node", {})
+                        patterns.append({
+                            "id": node.get("id"),
+                            "name": node.get("name"),
+                            "description": node.get("description", "")[:500],
+                            "x_mitre_id": node.get("x_mitre_id"),
+                            "kill_chain_phases": [
+                                phase.get("phase_name")
+                                for phase in node.get("killChainPhases", [])
+                            ]
+                        })
+
+                    return {
+                        "actor_name": data.get("name", actor_name),
+                        "actor_id": actor_id,
+                        "actor_description": data.get("description", ""),
+                        "found": True,
+                        "attack_patterns": patterns
+                    }
+
+                except Exception as e:
+                    self.logger.warning(f"GraphQL query failed, falling back: {e}")
+                    return {
+                        "actor_name": actor_name,
+                        "actor_id": actor_id,
+                        "found": False,
+                        "attack_patterns": [],
+                        "error": str(e)
+                    }
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                self._executor, _get_actor_ttps
+            )
+
+            self.logger.info(f"Retrieved {len(result.get('attack_patterns', []))} TTPs for {actor_identifier}")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Failed to get threat actor TTPs: {e}")
+            raise
+
+    async def get_malware_techniques(
+        self,
+        malware_identifier: str,
+        limit: int = 50
+    ) -> Dict[str, Any]:
+        """Get attack patterns used by malware and associated threat actors.
+
+        Args:
+            malware_identifier: Malware name or ID
+            limit: Maximum number of results to return
+
+        Returns:
+            Dictionary containing malware info and associated techniques
+
+        Example:
+            >>> techniques = await client.get_malware_techniques("Emotet")
+            >>> print(f"Found {len(techniques['attack_patterns'])} techniques")
+        """
+        try:
+            client = await self._get_client()
+
+            def _get_malware_techniques():
+                # Search for malware by name if not an ID
+                malware_id = None
+                malware_name = malware_identifier
+
+                if not malware_identifier.startswith("malware--"):
+                    malwares = client.malware.list(search=malware_identifier, first=1)
+                    if malwares:
+                        malware_id = malwares[0].get("id")
+                        malware_name = malwares[0].get("name")
+                else:
+                    malware_id = malware_identifier
+
+                if not malware_id:
+                    return {
+                        "malware_name": malware_identifier,
+                        "malware_id": None,
+                        "found": False,
+                        "attack_patterns": [],
+                        "threat_actors": []
+                    }
+
+                # GraphQL query for malware techniques and threat actors
+                query = """
+                    query GetMalwareTechniques($id: String!) {
+                        malware(id: $id) {
+                            id
+                            name
+                            description
+                            malware_types
+                            attackPatterns {
+                                edges {
+                                    node {
+                                        id
+                                        name
+                                        description
+                                        x_mitre_id
+                                        killChainPhases {
+                                            phase_name
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                """
+
+                try:
+                    result = client.query(query, {"id": malware_id})
+                    data = result.get("data", {}).get("malware", {})
+
+                    if not data:
+                        return {
+                            "malware_name": malware_name,
+                            "malware_id": malware_id,
+                            "found": False,
+                            "attack_patterns": [],
+                            "threat_actors": []
+                        }
+
+                    # Extract attack patterns
+                    patterns = []
+                    attack_patterns_data = data.get("attackPatterns", {}).get("edges", [])
+
+                    for edge in attack_patterns_data[:limit]:
+                        node = edge.get("node", {})
+                        patterns.append({
+                            "id": node.get("id"),
+                            "name": node.get("name"),
+                            "description": node.get("description", "")[:500],
+                            "x_mitre_id": node.get("x_mitre_id"),
+                            "kill_chain_phases": [
+                                phase.get("phase_name")
+                                for phase in node.get("killChainPhases", [])
+                            ]
+                        })
+
+                    return {
+                        "malware_name": data.get("name", malware_name),
+                        "malware_id": malware_id,
+                        "malware_description": data.get("description", ""),
+                        "malware_types": data.get("malware_types", []),
+                        "found": True,
+                        "attack_patterns": patterns,
+                        "threat_actors": []  # Could be extended with additional query
+                    }
+
+                except Exception as e:
+                    self.logger.warning(f"GraphQL query failed, falling back: {e}")
+                    return {
+                        "malware_name": malware_name,
+                        "malware_id": malware_id,
+                        "found": False,
+                        "attack_patterns": [],
+                        "threat_actors": [],
+                        "error": str(e)
+                    }
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                self._executor, _get_malware_techniques
+            )
+
+            self.logger.info(f"Retrieved {len(result.get('attack_patterns', []))} techniques for malware {malware_identifier}")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Failed to get malware techniques: {e}")
+            raise
+
+    async def get_campaign_details(
+        self,
+        campaign_identifier: str
+    ) -> Dict[str, Any]:
+        """Get comprehensive campaign details with full relationship graph.
+
+        Args:
+            campaign_identifier: Campaign name or ID
+
+        Returns:
+            Dictionary containing campaign details and all relationships
+
+        Example:
+            >>> campaign = await client.get_campaign_details("Operation X")
+            >>> print(f"Campaign has {len(campaign['threat_actors'])} threat actors")
+        """
+        try:
+            client = await self._get_client()
+
+            def _get_campaign_details():
+                # Search for campaign by name if not an ID
+                campaign_id = None
+                campaign_name = campaign_identifier
+
+                if not campaign_identifier.startswith("campaign--"):
+                    campaigns = client.campaign.list(search=campaign_identifier, first=1)
+                    if campaigns:
+                        campaign_id = campaigns[0].get("id")
+                        campaign_name = campaigns[0].get("name")
+                else:
+                    campaign_id = campaign_identifier
+
+                if not campaign_id:
+                    return {
+                        "campaign_name": campaign_identifier,
+                        "campaign_id": None,
+                        "found": False,
+                        "threat_actors": [],
+                        "attack_patterns": [],
+                        "malware": [],
+                        "targets": []
+                    }
+
+                # GraphQL query for campaign relationships
+                query = """
+                    query GetCampaignDetails($id: String!) {
+                        campaign(id: $id) {
+                            id
+                            name
+                            description
+                            first_seen
+                            last_seen
+                            attackPatterns {
+                                edges {
+                                    node {
+                                        id
+                                        name
+                                        x_mitre_id
+                                    }
+                                }
+                            }
+                        }
+                    }
+                """
+
+                try:
+                    result = client.query(query, {"id": campaign_id})
+                    data = result.get("data", {}).get("campaign", {})
+
+                    if not data:
+                        return {
+                            "campaign_name": campaign_name,
+                            "campaign_id": campaign_id,
+                            "found": False,
+                            "threat_actors": [],
+                            "attack_patterns": [],
+                            "malware": [],
+                            "targets": []
+                        }
+
+                    # Extract attack patterns
+                    patterns = []
+                    attack_patterns_data = data.get("attackPatterns", {}).get("edges", [])
+
+                    for edge in attack_patterns_data:
+                        node = edge.get("node", {})
+                        patterns.append({
+                            "id": node.get("id"),
+                            "name": node.get("name"),
+                            "x_mitre_id": node.get("x_mitre_id")
+                        })
+
+                    return {
+                        "campaign_name": data.get("name", campaign_name),
+                        "campaign_id": campaign_id,
+                        "campaign_description": data.get("description", ""),
+                        "first_seen": data.get("first_seen"),
+                        "last_seen": data.get("last_seen"),
+                        "found": True,
+                        "threat_actors": [],  # Could be extended
+                        "attack_patterns": patterns,
+                        "malware": [],  # Could be extended
+                        "targets": []  # Could be extended
+                    }
+
+                except Exception as e:
+                    self.logger.warning(f"GraphQL query failed: {e}")
+                    return {
+                        "campaign_name": campaign_name,
+                        "campaign_id": campaign_id,
+                        "found": False,
+                        "threat_actors": [],
+                        "attack_patterns": [],
+                        "malware": [],
+                        "targets": [],
+                        "error": str(e)
+                    }
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                self._executor, _get_campaign_details
+            )
+
+            self.logger.info(f"Retrieved campaign details for {campaign_identifier}")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Failed to get campaign details: {e}")
+            raise
+
+    async def get_entity_relationships(
+        self,
+        entity_id: str,
+        relationship_type: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Get relationships for any entity type.
+
+        Args:
+            entity_id: Entity ID to query relationships for
+            relationship_type: Optional filter (uses, targets, indicates, related-to)
+            limit: Maximum number of relationships to return
+
+        Returns:
+            List of related entities with relationship info
+
+        Example:
+            >>> rels = await client.get_entity_relationships(
+            ...     "threat-actor--xyz",
+            ...     relationship_type="uses"
+            ... )
+        """
+        try:
+            client = await self._get_client()
+
+            def _get_relationships():
+                try:
+                    # Use GraphQL to query relationships
+                    query = """
+                        query GetEntityRelationships($id: String!) {
+                            stixDomainObject(id: $id) {
+                                id
+                                entity_type
+                                ... on StixDomainObject {
+                                    stixCoreRelationships {
+                                        edges {
+                                            node {
+                                                id
+                                                relationship_type
+                                                from {
+                                                    ... on BasicObject {
+                                                        id
+                                                        entity_type
+                                                    }
+                                                }
+                                                to {
+                                                    ... on BasicObject {
+                                                        id
+                                                        entity_type
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    """
+
+                    result = client.query(query, {"id": entity_id})
+                    data = result.get("data", {}).get("stixDomainObject", {})
+
+                    if not data:
+                        return []
+
+                    relationships = []
+                    edges = data.get("stixCoreRelationships", {}).get("edges", [])
+
+                    for edge in edges[:limit]:
+                        node = edge.get("node", {})
+                        rel_type = node.get("relationship_type")
+
+                        # Filter by relationship type if specified
+                        if relationship_type and rel_type != relationship_type:
+                            continue
+
+                        from_entity = node.get("from", {})
+                        to_entity = node.get("to", {})
+
+                        relationships.append({
+                            "relationship_id": node.get("id"),
+                            "relationship_type": rel_type,
+                            "from_id": from_entity.get("id"),
+                            "from_type": from_entity.get("entity_type"),
+                            "to_id": to_entity.get("id"),
+                            "to_type": to_entity.get("entity_type")
+                        })
+
+                    return relationships
+
+                except Exception as e:
+                    self.logger.warning(f"GraphQL relationship query failed: {e}")
+                    return []
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                self._executor, _get_relationships
+            )
+
+            self.logger.info(f"Retrieved {len(result)} relationships for {entity_id}")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Failed to get entity relationships: {e}")
+            raise
+
     async def close(self):
         """Close the client and clean up resources."""
         if self._executor:

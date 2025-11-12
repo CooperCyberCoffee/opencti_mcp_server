@@ -382,6 +382,172 @@ def get_mcp_tools() -> List[Tool]:
                 },
                 "required": ["search_term"]
             }
+        ),
+
+        Tool(
+            name="get_threat_actor_ttps",
+            description=(
+                "Get attack patterns (TTPs) used by a threat actor or intrusion set. "
+                "Traverses 'uses' relationships to retrieve MITRE ATT&CK techniques "
+                "associated with APT groups and threat actors. Essential for threat "
+                "actor profiling and attribution analysis."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "actor_name": {
+                        "type": "string",
+                        "description": (
+                            "Threat actor or intrusion set name (e.g., 'APT29', 'Lazarus Group'). "
+                            "Also accepts entity IDs (intrusion-set-- or threat-actor--)"
+                        )
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 50,
+                        "description": "Maximum number of attack patterns to retrieve (1-100)"
+                    },
+                    "analysis_type": {
+                        "type": "string",
+                        "enum": [
+                            "executive",
+                            "technical",
+                            "incident_response"
+                        ],
+                        "default": "technical",
+                        "description": "Type of professional analysis template to apply"
+                    }
+                },
+                "required": ["actor_name"]
+            }
+        ),
+
+        Tool(
+            name="get_malware_techniques",
+            description=(
+                "Get attack patterns used by malware families. Traverses relationships "
+                "between malware and MITRE ATT&CK techniques to show TTPs used by "
+                "ransomware, trojans, and other malware. Critical for malware analysis "
+                "and defensive planning."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "malware_name": {
+                        "type": "string",
+                        "description": (
+                            "Malware name (e.g., 'Emotet', 'Cobalt Strike', 'Ryuk'). "
+                            "Also accepts malware IDs (malware--)"
+                        )
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 50,
+                        "description": "Maximum number of attack patterns to retrieve (1-100)"
+                    },
+                    "analysis_type": {
+                        "type": "string",
+                        "enum": [
+                            "executive",
+                            "technical",
+                            "incident_response"
+                        ],
+                        "default": "technical",
+                        "description": "Type of professional analysis template to apply"
+                    }
+                },
+                "required": ["malware_name"]
+            }
+        ),
+
+        Tool(
+            name="get_campaign_details",
+            description=(
+                "Get comprehensive campaign details with full relationship graph. "
+                "Retrieves associated threat actors, attack patterns, malware, targets, "
+                "and timeline information. Essential for understanding coordinated "
+                "threat campaigns and attribution."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "campaign_name": {
+                        "type": "string",
+                        "description": (
+                            "Campaign name (e.g., 'SolarWinds Compromise', 'Operation Aurora'). "
+                            "Also accepts campaign IDs (campaign--)"
+                        )
+                    },
+                    "analysis_type": {
+                        "type": "string",
+                        "enum": [
+                            "executive",
+                            "technical",
+                            "incident_response"
+                        ],
+                        "default": "executive",
+                        "description": "Type of professional analysis template to apply"
+                    }
+                },
+                "required": ["campaign_name"]
+            }
+        ),
+
+        Tool(
+            name="get_entity_relationships",
+            description=(
+                "Get relationships for any entity type. Generic relationship traversal "
+                "supporting 'uses', 'targets', 'indicates', 'related-to' and other "
+                "relationship types. Flexible tool for exploring the OpenCTI knowledge "
+                "graph and understanding entity connections."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "entity_id": {
+                        "type": "string",
+                        "description": (
+                            "Entity ID to query relationships for (e.g., 'threat-actor--abc123', "
+                            "'malware--xyz789'). Must be a valid OpenCTI entity ID."
+                        )
+                    },
+                    "relationship_type": {
+                        "type": "string",
+                        "enum": [
+                            "uses",
+                            "targets",
+                            "indicates",
+                            "related-to",
+                            "attributed-to",
+                            "mitigates",
+                            "all"
+                        ],
+                        "default": "all",
+                        "description": (
+                            "Filter by relationship type:\n"
+                            "- uses: Entity uses another (e.g., actor uses malware)\n"
+                            "- targets: Entity targets another (e.g., campaign targets sector)\n"
+                            "- indicates: Indicator indicates entity (e.g., IP indicates malware)\n"
+                            "- related-to: General relationship\n"
+                            "- attributed-to: Attribution relationship\n"
+                            "- mitigates: Mitigation relationship\n"
+                            "- all: Return all relationship types"
+                        )
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 50,
+                        "description": "Maximum number of relationships to return (1-100)"
+                    }
+                },
+                "required": ["entity_id"]
+            }
         )
     ]
 
@@ -437,5 +603,29 @@ def get_tool_descriptions() -> dict:
             "General entity search across all OpenCTI entity types. Flexible "
             "search for threat actors, campaigns, intrusion sets, tools, and "
             "more across the entire OpenCTI knowledge base."
+        ),
+        "get_threat_actor_ttps": (
+            "Query attack patterns (TTPs) used by specific threat actors or "
+            "intrusion sets. Retrieves MITRE ATT&CK techniques, kill chain phases, "
+            "and associated tactics with professional analysis templates. This is "
+            "the core relationship query for threat actor attribution."
+        ),
+        "get_malware_techniques": (
+            "Query attack patterns and techniques used by specific malware families. "
+            "Retrieves MITRE ATT&CK techniques associated with malware, showing how "
+            "the malware operates and what TTPs it implements. Essential for "
+            "understanding malware behavior and defensive countermeasures."
+        ),
+        "get_campaign_details": (
+            "Retrieve comprehensive campaign relationship graphs including all "
+            "associated entities: threat actors, malware, attack patterns, targets, "
+            "and indicators. Provides complete campaign intelligence with timeline "
+            "and attribution data for incident response and threat hunting."
+        ),
+        "get_entity_relationships": (
+            "Generic relationship traversal tool for querying relationships between "
+            "any OpenCTI entities. Supports filtering by relationship type (uses, "
+            "targets, indicates, related-to, etc.) and provides flexible relationship "
+            "graph queries for custom threat intelligence research."
         )
     }

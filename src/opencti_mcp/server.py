@@ -116,6 +116,18 @@ class OpenCTIMCPServer:
                 elif name == "search_entities":
                     return await self._handle_search_entities(arguments)
 
+                elif name == "get_threat_actor_ttps":
+                    return await self._handle_get_threat_actor_ttps(arguments)
+
+                elif name == "get_malware_techniques":
+                    return await self._handle_get_malware_techniques(arguments)
+
+                elif name == "get_campaign_details":
+                    return await self._handle_get_campaign_details(arguments)
+
+                elif name == "get_entity_relationships":
+                    return await self._handle_get_entity_relationships(arguments)
+
                 else:
                     error_msg = f"Unknown tool: {name}"
                     self.logger.error("unknown_tool", tool=name)
@@ -801,6 +813,417 @@ class OpenCTIMCPServer:
             output += "\n"
 
         self.logger.info("entity_search_complete", results=len(results))
+
+        return [TextContent(type="text", text=output)]
+
+    async def _handle_get_threat_actor_ttps(self, args: dict) -> list[TextContent]:
+        """Handle get_threat_actor_ttps tool.
+
+        Args:
+            args: Tool arguments including actor_name, limit, analysis_type
+
+        Returns:
+            List containing TextContent with formatted TTP analysis
+        """
+        actor_name = args.get("actor_name", "")
+        limit = args.get("limit", 50)
+        analysis_type = args.get("analysis_type", "technical")
+
+        if not actor_name:
+            return [TextContent(
+                type="text",
+                text="❌ Error: actor_name is required"
+            )]
+
+        self.logger.info(
+            "fetching_actor_ttps",
+            actor_name=actor_name,
+            limit=limit,
+            analysis_type=analysis_type
+        )
+
+        # Fetch TTPs from OpenCTI
+        result = await self.opencti_client.get_threat_actor_ttps(
+            actor_name=actor_name,
+            limit=limit
+        )
+
+        if not result or not result.get("attack_patterns"):
+            return [TextContent(
+                type="text",
+                text=(
+                    f"ℹ️ No threat actor found matching '{actor_name}' or no TTPs associated.\n\n"
+                    "**Suggestions:**\n"
+                    "- Try a different actor name or alias\n"
+                    "- Search for the actor first using search_entities\n"
+                    "- Check if threat actor data is imported in OpenCTI\n"
+                )
+            )]
+
+        attack_patterns = result["attack_patterns"]
+
+        # Group by kill chain phase
+        by_phase = {}
+        for pattern in attack_patterns:
+            phases = pattern.get("kill_chain_phases", ["unknown"])
+            for phase in phases:
+                if phase not in by_phase:
+                    by_phase[phase] = []
+                by_phase[phase].append(pattern)
+
+        # Format output
+        output = (
+            f"# Threat Actor TTPs\n\n"
+            f"**Threat Actor:** {result.get('actor_name', actor_name)}\n"
+            f"**Total TTPs:** {len(attack_patterns)}\n\n"
+            "**Kill Chain Distribution:**\n"
+        )
+
+        for phase, patterns in sorted(by_phase.items()):
+            output += f"- {phase}: {len(patterns)} techniques\n"
+
+        output += "\n---\n\n"
+
+        # Group output by kill chain phase
+        for phase in sorted(by_phase.keys()):
+            output += f"## {phase.upper()}\n\n"
+
+            for pattern in by_phase[phase]:
+                output += f"### {pattern.get('name', 'Unknown')}\n\n"
+
+                if pattern.get('x_mitre_id'):
+                    output += f"- **MITRE ID:** {pattern['x_mitre_id']}\n"
+
+                desc = pattern.get('description', 'No description')
+                output += f"- **Description:** {desc[:300]}...\n"
+
+                labels = pattern.get('labels', [])
+                if labels:
+                    output += f"- **Labels:** {', '.join(labels[:3])}\n"
+
+                output += "\n"
+
+        # Add analysis template guidance
+        template = AnalysisTemplates.get_template(analysis_type)
+        output += "\n---\n\n" + template
+
+        self.logger.info("actor_ttps_retrieved", count=len(attack_patterns))
+
+        return [TextContent(type="text", text=output)]
+
+    async def _handle_get_malware_techniques(self, args: dict) -> list[TextContent]:
+        """Handle get_malware_techniques tool.
+
+        Args:
+            args: Tool arguments including malware_name, limit, analysis_type
+
+        Returns:
+            List containing TextContent with formatted malware technique analysis
+        """
+        malware_name = args.get("malware_name", "")
+        limit = args.get("limit", 50)
+        analysis_type = args.get("analysis_type", "technical")
+
+        if not malware_name:
+            return [TextContent(
+                type="text",
+                text="❌ Error: malware_name is required"
+            )]
+
+        self.logger.info(
+            "fetching_malware_techniques",
+            malware_name=malware_name,
+            limit=limit,
+            analysis_type=analysis_type
+        )
+
+        # Fetch techniques from OpenCTI
+        result = await self.opencti_client.get_malware_techniques(
+            malware_name=malware_name,
+            limit=limit
+        )
+
+        if not result or not result.get("attack_patterns"):
+            return [TextContent(
+                type="text",
+                text=(
+                    f"ℹ️ No malware found matching '{malware_name}' or no techniques associated.\n\n"
+                    "**Suggestions:**\n"
+                    "- Try a different malware name or variant\n"
+                    "- Search for the malware first using get_malware\n"
+                    "- Check if malware technique mappings are imported in OpenCTI\n"
+                )
+            )]
+
+        attack_patterns = result["attack_patterns"]
+
+        # Group by kill chain phase
+        by_phase = {}
+        for pattern in attack_patterns:
+            phases = pattern.get("kill_chain_phases", ["unknown"])
+            for phase in phases:
+                if phase not in by_phase:
+                    by_phase[phase] = []
+                by_phase[phase].append(pattern)
+
+        # Format output
+        output = (
+            f"# Malware Techniques\n\n"
+            f"**Malware:** {result.get('malware_name', malware_name)}\n"
+            f"**Total Techniques:** {len(attack_patterns)}\n\n"
+        )
+
+        if result.get("malware_types"):
+            output += f"**Malware Types:** {', '.join(result['malware_types'])}\n\n"
+
+        output += "**Kill Chain Distribution:**\n"
+        for phase, patterns in sorted(by_phase.items()):
+            output += f"- {phase}: {len(patterns)} techniques\n"
+
+        output += "\n---\n\n"
+
+        # Group output by kill chain phase
+        for phase in sorted(by_phase.keys()):
+            output += f"## {phase.upper()}\n\n"
+
+            for pattern in by_phase[phase]:
+                output += f"### {pattern.get('name', 'Unknown')}\n\n"
+
+                if pattern.get('x_mitre_id'):
+                    output += f"- **MITRE ID:** {pattern['x_mitre_id']}\n"
+
+                desc = pattern.get('description', 'No description')
+                output += f"- **Description:** {desc[:300]}...\n"
+
+                output += "\n"
+
+        # Add analysis template guidance
+        template = AnalysisTemplates.get_template(analysis_type)
+        output += "\n---\n\n" + template
+
+        self.logger.info("malware_techniques_retrieved", count=len(attack_patterns))
+
+        return [TextContent(type="text", text=output)]
+
+    async def _handle_get_campaign_details(self, args: dict) -> list[TextContent]:
+        """Handle get_campaign_details tool.
+
+        Args:
+            args: Tool arguments including campaign_name, analysis_type
+
+        Returns:
+            List containing TextContent with formatted campaign analysis
+        """
+        campaign_name = args.get("campaign_name", "")
+        analysis_type = args.get("analysis_type", "executive")
+
+        if not campaign_name:
+            return [TextContent(
+                type="text",
+                text="❌ Error: campaign_name is required"
+            )]
+
+        self.logger.info(
+            "fetching_campaign_details",
+            campaign_name=campaign_name,
+            analysis_type=analysis_type
+        )
+
+        # Fetch campaign details from OpenCTI
+        result = await self.opencti_client.get_campaign_details(
+            campaign_name=campaign_name
+        )
+
+        if not result:
+            return [TextContent(
+                type="text",
+                text=(
+                    f"ℹ️ No campaign found matching '{campaign_name}'.\n\n"
+                    "**Suggestions:**\n"
+                    "- Try a different campaign name\n"
+                    "- Search for campaigns first using search_entities with entity_types=['Campaign']\n"
+                    "- Check if campaign data is imported in OpenCTI\n"
+                )
+            )]
+
+        # Format output
+        output = (
+            f"# Campaign Intelligence Report\n\n"
+            f"**Campaign:** {result.get('name', campaign_name)}\n"
+        )
+
+        if result.get('description'):
+            output += f"\n**Description:**\n{result['description']}\n"
+
+        if result.get('first_seen') or result.get('last_seen'):
+            output += "\n**Timeline:**\n"
+            if result.get('first_seen'):
+                output += f"- First Seen: {result['first_seen']}\n"
+            if result.get('last_seen'):
+                output += f"- Last Seen: {result['last_seen']}\n"
+
+        output += "\n---\n\n"
+
+        # Threat Actors
+        threat_actors = result.get("threat_actors", [])
+        if threat_actors:
+            output += f"## Attribution ({len(threat_actors)} threat actors)\n\n"
+            for actor in threat_actors:
+                output += f"- **{actor.get('name', 'Unknown')}**"
+                if actor.get('description'):
+                    output += f": {actor['description'][:200]}..."
+                output += "\n"
+            output += "\n"
+
+        # Attack Patterns
+        attack_patterns = result.get("attack_patterns", [])
+        if attack_patterns:
+            output += f"## TTPs ({len(attack_patterns)} techniques)\n\n"
+            by_phase = {}
+            for pattern in attack_patterns:
+                phases = pattern.get("kill_chain_phases", ["unknown"])
+                for phase in phases:
+                    if phase not in by_phase:
+                        by_phase[phase] = []
+                    if pattern not in by_phase[phase]:
+                        by_phase[phase].append(pattern)
+
+            for phase, patterns in sorted(by_phase.items()):
+                output += f"### {phase.upper()}\n"
+                for pattern in patterns:
+                    mitre_id = pattern.get('x_mitre_id', '')
+                    output += f"- {pattern.get('name', 'Unknown')}"
+                    if mitre_id:
+                        output += f" ({mitre_id})"
+                    output += "\n"
+                output += "\n"
+
+        # Malware
+        malware = result.get("malware", [])
+        if malware:
+            output += f"## Malware ({len(malware)} families/samples)\n\n"
+            for m in malware:
+                output += f"- **{m.get('name', 'Unknown')}**"
+                mtypes = m.get('malware_types', [])
+                if mtypes:
+                    output += f" ({', '.join(mtypes)})"
+                output += "\n"
+            output += "\n"
+
+        # Indicators
+        indicators = result.get("indicators", [])
+        if indicators:
+            output += f"## Indicators ({len(indicators)} IOCs)\n\n"
+            type_counts = {}
+            for indicator in indicators:
+                for ioc_type in indicator.get('indicator_types', ['unknown']):
+                    type_counts[ioc_type] = type_counts.get(ioc_type, 0) + 1
+
+            for ioc_type, count in sorted(type_counts.items(), key=lambda x: x[1], reverse=True):
+                output += f"- {ioc_type}: {count}\n"
+            output += "\n"
+
+        # Add analysis template guidance
+        template = AnalysisTemplates.get_template(analysis_type)
+        output += "\n---\n\n" + template
+
+        self.logger.info("campaign_details_retrieved", campaign=result.get('name'))
+
+        return [TextContent(type="text", text=output)]
+
+    async def _handle_get_entity_relationships(self, args: dict) -> list[TextContent]:
+        """Handle get_entity_relationships tool.
+
+        Args:
+            args: Tool arguments including entity_id, relationship_types, limit
+
+        Returns:
+            List containing TextContent with formatted relationship graph
+        """
+        entity_id = args.get("entity_id", "")
+        relationship_types = args.get("relationship_types", ["all"])
+        limit = args.get("limit", 50)
+
+        if not entity_id:
+            return [TextContent(
+                type="text",
+                text="❌ Error: entity_id is required"
+            )]
+
+        self.logger.info(
+            "fetching_entity_relationships",
+            entity_id=entity_id,
+            relationship_types=relationship_types,
+            limit=limit
+        )
+
+        # Fetch relationships from OpenCTI
+        result = await self.opencti_client.get_entity_relationships(
+            entity_id=entity_id,
+            relationship_types=relationship_types,
+            limit=limit
+        )
+
+        if not result:
+            return [TextContent(
+                type="text",
+                text=(
+                    f"ℹ️ No entity found with ID '{entity_id}' or no relationships found.\n\n"
+                    "**Suggestions:**\n"
+                    "- Verify the entity ID is correct\n"
+                    "- Try searching for the entity first to get its ID\n"
+                    "- Adjust relationship type filters\n"
+                )
+            )]
+
+        relationships = result.get("relationships", [])
+
+        if not relationships:
+            return [TextContent(
+                type="text",
+                text=(
+                    f"# Entity Relationships\n\n"
+                    f"**Entity:** {result.get('entity_name', 'Unknown')} ({result.get('entity_type', 'Unknown')})\n\n"
+                    "ℹ️ No relationships found for this entity.\n"
+                )
+            )]
+
+        # Group by relationship type
+        by_type = {}
+        for rel in relationships:
+            rel_type = rel.get("relationship_type", "unknown")
+            if rel_type not in by_type:
+                by_type[rel_type] = []
+            by_type[rel_type].append(rel)
+
+        # Format output
+        output = (
+            f"# Entity Relationships\n\n"
+            f"**Entity:** {result.get('entity_name', 'Unknown')}\n"
+            f"**Entity Type:** {result.get('entity_type', 'Unknown')}\n"
+            f"**Total Relationships:** {len(relationships)}\n\n"
+            "**Relationship Types:**\n"
+        )
+
+        for rel_type, rels in sorted(by_type.items()):
+            output += f"- {rel_type}: {len(rels)}\n"
+
+        output += "\n---\n\n"
+
+        # Group output by relationship type
+        for rel_type in sorted(by_type.keys()):
+            output += f"## {rel_type.upper()}\n\n"
+
+            for rel in by_type[rel_type]:
+                target = rel.get("target", {})
+                output += f"- **{target.get('name', 'Unknown')}** ({target.get('entity_type', 'Unknown')})"
+
+                if target.get('description'):
+                    output += f"\n  {target['description'][:150]}..."
+
+                output += "\n\n"
+
+        self.logger.info("entity_relationships_retrieved", count=len(relationships))
 
         return [TextContent(type="text", text=output)]
 
