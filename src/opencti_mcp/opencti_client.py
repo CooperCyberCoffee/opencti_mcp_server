@@ -1155,7 +1155,7 @@ class OpenCTIClient:
         - Threat actor name: "APT28"
         - Alias: "Fancy Bear", "Sofacy"
         - MITRE ID: "G0007"
-        - Entity ID: "intrusion-set--abc123..."
+        - Entity ID: "intrusion-set--abc123..." or plain UUID
 
         Args:
             actor_name: Threat actor/intrusion set name, alias, MITRE ID, or entity ID
@@ -1190,104 +1190,115 @@ class OpenCTIClient:
                 }
 
             if self.debug:
-                self.logger.info(f"[DEBUG] Resolved '{actor_name}' → {actor_id} ({entity_type})")
+                self.logger.info(f"[TTP] Resolved '{actor_name}' → {actor_id} ({entity_type})")
 
-            # Step 2: Query relationships using GraphQL
+            # Step 2: Get entity details and relationships using pycti client
             client = await self._get_client()
 
-            def _query_actor_ttps():
-
-                # GraphQL query to get attack patterns
-                query = """
-                    query GetActorTTPs($id: String!) {
-                        stixDomainObject(id: $id) {
-                            ... on IntrusionSet {
-                                id
-                                name
-                                description
-                                attackPatterns {
-                                    edges {
-                                        node {
-                                            id
-                                            name
-                                            description
-                                            x_mitre_id
-                                            killChainPhases {
-                                                phase_name
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            ... on ThreatActor {
-                                id
-                                name
-                                description
-                                attackPatterns {
-                                    edges {
-                                        node {
-                                            id
-                                            name
-                                            description
-                                            x_mitre_id
-                                            killChainPhases {
-                                                phase_name
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                """
-
+            def _get_ttps():
+                import traceback
                 try:
-                    self.logger.info(f"[DEBUG] Executing GraphQL query with id: {actor_id}")
-                    result = client.query(query, {"id": actor_id})
-                    self.logger.info(f"[DEBUG] GraphQL result keys: {result.keys() if result else 'None'}")
+                    if self.debug:
+                        self.logger.info(f"[TTP] Fetching entity details for {actor_id}")
 
-                    data = result.get("data", {}).get("stixDomainObject", {})
-                    self.logger.info(f"[DEBUG] stixDomainObject data: {data}")
+                    # Get actor details first
+                    if entity_type == 'intrusion-set':
+                        actor_data = client.intrusion_set.read(id=actor_id)
+                    else:
+                        actor_data = client.threat_actor.read(id=actor_id)
 
-                    if not data:
-                        self.logger.warning(f"[DEBUG] No stixDomainObject data returned for id: {actor_id}")
+                    if not actor_data:
+                        if self.debug:
+                            self.logger.warning(f"[TTP] Could not read entity {actor_id}")
                         return {
                             "actor_name": actor_name,
                             "actor_id": actor_id,
                             "found": False,
+                            "attack_patterns": [],
+                            "error": "Could not read entity details"
+                        }
+
+                    actor_name_actual = actor_data.get('name', actor_name)
+                    actor_description = actor_data.get('description', '')
+
+                    if self.debug:
+                        self.logger.info(f"[TTP] Entity name: {actor_name_actual}")
+                        self.logger.info(f"[TTP] Getting relationships from {actor_id}")
+
+                    # Get 'uses' relationships to attack patterns
+                    relationships = client.stix_core_relationship.list(
+                        fromId=actor_id,
+                        relationship_type='uses',
+                        toTypes=['Attack-Pattern'],
+                        first=limit
+                    )
+
+                    if self.debug:
+                        self.logger.info(f"[TTP] Found {len(relationships) if relationships else 0} relationships")
+
+                    if not relationships:
+                        return {
+                            "actor_name": actor_name_actual,
+                            "actor_id": actor_id,
+                            "actor_description": actor_description,
+                            "found": True,
                             "attack_patterns": []
                         }
 
-                    # Extract attack patterns
+                    # Extract attack patterns from relationships
                     patterns = []
-                    attack_patterns_data = data.get("attackPatterns", {})
-                    self.logger.info(f"[DEBUG] attackPatterns data type: {type(attack_patterns_data)}")
-                    edges = attack_patterns_data.get("edges", []) if attack_patterns_data else []
-                    self.logger.info(f"[DEBUG] Found {len(edges)} attack pattern edges")
+                    for rel in relationships[:limit]:
+                        try:
+                            # The 'to' field contains the attack pattern
+                            to_entity = rel.get('to')
+                            if to_entity:
+                                # Already have basic info in the relationship
+                                pattern_id = to_entity.get('id')
+                                pattern_name = to_entity.get('name', 'Unknown')
+                                pattern_description = to_entity.get('description', '')
+                                x_mitre_id = to_entity.get('x_mitre_id', '')
 
-                    for edge in edges[:limit]:
-                        node = edge.get("node", {})
-                        patterns.append({
-                            "id": node.get("id"),
-                            "name": node.get("name"),
-                            "description": node.get("description", "")[:500],
-                            "x_mitre_id": node.get("x_mitre_id"),
-                            "kill_chain_phases": [
-                                phase.get("phase_name")
-                                for phase in node.get("killChainPhases", [])
-                            ]
-                        })
+                                # Get kill chain phases if available
+                                kill_chain_phases = []
+                                if 'killChainPhases' in to_entity:
+                                    kill_chain_phases = [
+                                        phase.get('phase_name', '')
+                                        for phase in to_entity.get('killChainPhases', [])
+                                    ]
+
+                                patterns.append({
+                                    "id": pattern_id,
+                                    "name": pattern_name,
+                                    "description": pattern_description[:500] if pattern_description else "",
+                                    "x_mitre_id": x_mitre_id,
+                                    "kill_chain_phases": kill_chain_phases
+                                })
+
+                                if self.debug:
+                                    self.logger.info(f"[TTP] Added: {pattern_name} ({x_mitre_id})")
+
+                        except Exception as e:
+                            if self.debug:
+                                self.logger.warning(f"[TTP] Error processing relationship: {e}")
+                            continue
+
+                    if self.debug:
+                        self.logger.info(f"[TTP] Total patterns extracted: {len(patterns)}")
 
                     return {
-                        "actor_name": data.get("name", actor_name),
+                        "actor_name": actor_name_actual,
                         "actor_id": actor_id,
-                        "actor_description": data.get("description", ""),
+                        "actor_description": actor_description,
                         "found": True,
                         "attack_patterns": patterns
                     }
 
                 except Exception as e:
-                    self.logger.warning(f"GraphQL query failed, falling back: {e}")
+                    if self.debug:
+                        self.logger.error(f"[TTP] Error getting TTPs:")
+                        self.logger.error(f"[TTP] {str(e)}")
+                        self.logger.error(f"[TTP] Traceback:\n{traceback.format_exc()}")
+
                     return {
                         "actor_name": actor_name,
                         "actor_id": actor_id,
@@ -1297,7 +1308,7 @@ class OpenCTIClient:
                     }
 
             result = await asyncio.get_event_loop().run_in_executor(
-                self._executor, _query_actor_ttps
+                self._executor, _get_ttps
             )
 
             self.logger.info(f"Retrieved {len(result.get('attack_patterns', []))} TTPs for {actor_name}")
@@ -1352,88 +1363,105 @@ class OpenCTIClient:
                 }
 
             if self.debug:
-                self.logger.info(f"[DEBUG] Resolved '{malware_name}' → {malware_id}")
+                self.logger.info(f"[MALWARE] Resolved '{malware_name}' → {malware_id}")
 
-            # Step 2: Query relationships using GraphQL
+            # Step 2: Get malware details and relationships using pycti client
             client = await self._get_client()
 
-            def _query_malware_techniques():
-
-                # GraphQL query for malware techniques and threat actors
-                query = """
-                    query GetMalwareTechniques($id: String!) {
-                        malware(id: $id) {
-                            id
-                            name
-                            description
-                            malware_types
-                            attackPatterns {
-                                edges {
-                                    node {
-                                        id
-                                        name
-                                        description
-                                        x_mitre_id
-                                        killChainPhases {
-                                            phase_name
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                """
-
+            def _get_techniques():
+                import traceback
                 try:
-                    self.logger.info(f"[DEBUG] Executing GraphQL query with id: {malware_id}")
-                    result = client.query(query, {"id": malware_id})
-                    self.logger.info(f"[DEBUG] GraphQL result keys: {result.keys() if result else 'None'}")
+                    if self.debug:
+                        self.logger.info(f"[MALWARE] Fetching malware details for {malware_id}")
 
-                    data = result.get("data", {}).get("malware", {})
-                    self.logger.info(f"[DEBUG] malware data: {data}")
+                    # Get malware details first
+                    malware_data = client.malware.read(id=malware_id)
 
-                    if not data:
-                        self.logger.warning(f"[DEBUG] No malware data returned for id: {malware_id}")
+                    if not malware_data:
+                        if self.debug:
+                            self.logger.warning(f"[MALWARE] Could not read malware {malware_id}")
                         return {
                             "malware_name": malware_name,
                             "malware_id": malware_id,
                             "found": False,
                             "attack_patterns": [],
-                            "threat_actors": []
+                            "threat_actors": [],
+                            "error": "Could not read malware details"
                         }
 
-                    # Extract attack patterns
-                    patterns = []
-                    attack_patterns_data = data.get("attackPatterns", {})
-                    self.logger.info(f"[DEBUG] attackPatterns data type: {type(attack_patterns_data)}")
-                    edges = attack_patterns_data.get("edges", []) if attack_patterns_data else []
-                    self.logger.info(f"[DEBUG] Found {len(edges)} attack pattern edges")
+                    malware_name_actual = malware_data.get('name', malware_name)
+                    malware_description = malware_data.get('description', '')
+                    malware_types = malware_data.get('malware_types', [])
 
-                    for edge in edges[:limit]:
-                        node = edge.get("node", {})
-                        patterns.append({
-                            "id": node.get("id"),
-                            "name": node.get("name"),
-                            "description": node.get("description", "")[:500],
-                            "x_mitre_id": node.get("x_mitre_id"),
-                            "kill_chain_phases": [
-                                phase.get("phase_name")
-                                for phase in node.get("killChainPhases", [])
-                            ]
-                        })
+                    if self.debug:
+                        self.logger.info(f"[MALWARE] Malware name: {malware_name_actual}")
+                        self.logger.info(f"[MALWARE] Getting relationships from {malware_id}")
+
+                    # Get 'uses' relationships to attack patterns
+                    relationships = client.stix_core_relationship.list(
+                        fromId=malware_id,
+                        relationship_type='uses',
+                        toTypes=['Attack-Pattern'],
+                        first=limit
+                    )
+
+                    if self.debug:
+                        self.logger.info(f"[MALWARE] Found {len(relationships) if relationships else 0} relationships")
+
+                    # Extract attack patterns from relationships
+                    patterns = []
+                    if relationships:
+                        for rel in relationships[:limit]:
+                            try:
+                                to_entity = rel.get('to')
+                                if to_entity:
+                                    pattern_id = to_entity.get('id')
+                                    pattern_name = to_entity.get('name', 'Unknown')
+                                    pattern_description = to_entity.get('description', '')
+                                    x_mitre_id = to_entity.get('x_mitre_id', '')
+
+                                    kill_chain_phases = []
+                                    if 'killChainPhases' in to_entity:
+                                        kill_chain_phases = [
+                                            phase.get('phase_name', '')
+                                            for phase in to_entity.get('killChainPhases', [])
+                                        ]
+
+                                    patterns.append({
+                                        "id": pattern_id,
+                                        "name": pattern_name,
+                                        "description": pattern_description[:500] if pattern_description else "",
+                                        "x_mitre_id": x_mitre_id,
+                                        "kill_chain_phases": kill_chain_phases
+                                    })
+
+                                    if self.debug:
+                                        self.logger.info(f"[MALWARE] Added: {pattern_name} ({x_mitre_id})")
+
+                            except Exception as e:
+                                if self.debug:
+                                    self.logger.warning(f"[MALWARE] Error processing relationship: {e}")
+                                continue
+
+                    if self.debug:
+                        self.logger.info(f"[MALWARE] Total patterns extracted: {len(patterns)}")
 
                     return {
-                        "malware_name": data.get("name", malware_name),
+                        "malware_name": malware_name_actual,
                         "malware_id": malware_id,
-                        "malware_description": data.get("description", ""),
-                        "malware_types": data.get("malware_types", []),
+                        "malware_description": malware_description,
+                        "malware_types": malware_types,
                         "found": True,
                         "attack_patterns": patterns,
                         "threat_actors": []  # Could be extended with additional query
                     }
 
                 except Exception as e:
-                    self.logger.warning(f"GraphQL query failed, falling back: {e}")
+                    if self.debug:
+                        self.logger.error(f"[MALWARE] Error getting techniques:")
+                        self.logger.error(f"[MALWARE] {str(e)}")
+                        self.logger.error(f"[MALWARE] Traceback:\n{traceback.format_exc()}")
+
                     return {
                         "malware_name": malware_name,
                         "malware_id": malware_id,
@@ -1444,7 +1472,7 @@ class OpenCTIClient:
                     }
 
             result = await asyncio.get_event_loop().run_in_executor(
-                self._executor, _query_malware_techniques
+                self._executor, _get_techniques
             )
 
             self.logger.info(f"Retrieved {len(result.get('attack_patterns', []))} techniques for malware {malware_name}")
@@ -1498,39 +1526,23 @@ class OpenCTIClient:
                 }
 
             if self.debug:
-                self.logger.info(f"[DEBUG] Resolved '{campaign_name}' → {campaign_id}")
+                self.logger.info(f"[CAMPAIGN] Resolved '{campaign_name}' → {campaign_id}")
 
-            # Step 2: Query relationships using GraphQL
+            # Step 2: Get campaign details and relationships using pycti client
             client = await self._get_client()
 
-            def _query_campaign_details():
-                # GraphQL query for campaign relationships
-                query = """
-                    query GetCampaignDetails($id: String!) {
-                        campaign(id: $id) {
-                            id
-                            name
-                            description
-                            first_seen
-                            last_seen
-                            attackPatterns {
-                                edges {
-                                    node {
-                                        id
-                                        name
-                                        x_mitre_id
-                                    }
-                                }
-                            }
-                        }
-                    }
-                """
-
+            def _get_details():
+                import traceback
                 try:
-                    result = client.query(query, {"id": campaign_id})
-                    data = result.get("data", {}).get("campaign", {})
+                    if self.debug:
+                        self.logger.info(f"[CAMPAIGN] Fetching campaign details for {campaign_id}")
 
-                    if not data:
+                    # Get campaign details first
+                    campaign_data = client.campaign.read(id=campaign_id)
+
+                    if not campaign_data:
+                        if self.debug:
+                            self.logger.warning(f"[CAMPAIGN] Could not read campaign {campaign_id}")
                         return {
                             "campaign_name": campaign_name,
                             "campaign_id": campaign_id,
@@ -1538,28 +1550,64 @@ class OpenCTIClient:
                             "threat_actors": [],
                             "attack_patterns": [],
                             "malware": [],
-                            "targets": []
+                            "targets": [],
+                            "error": "Could not read campaign details"
                         }
 
-                    # Extract attack patterns
-                    patterns = []
-                    attack_patterns_data = data.get("attackPatterns", {})
-                    edges = attack_patterns_data.get("edges", []) if attack_patterns_data else []
+                    campaign_name_actual = campaign_data.get('name', campaign_name)
+                    campaign_description = campaign_data.get('description', '')
+                    first_seen = campaign_data.get('first_seen')
+                    last_seen = campaign_data.get('last_seen')
 
-                    for edge in edges:
-                        node = edge.get("node", {})
-                        patterns.append({
-                            "id": node.get("id"),
-                            "name": node.get("name"),
-                            "x_mitre_id": node.get("x_mitre_id")
-                        })
+                    if self.debug:
+                        self.logger.info(f"[CAMPAIGN] Campaign name: {campaign_name_actual}")
+                        self.logger.info(f"[CAMPAIGN] Getting relationships from {campaign_id}")
+
+                    # Get 'uses' relationships to attack patterns
+                    relationships = client.stix_core_relationship.list(
+                        fromId=campaign_id,
+                        relationship_type='uses',
+                        toTypes=['Attack-Pattern'],
+                        first=50
+                    )
+
+                    if self.debug:
+                        self.logger.info(f"[CAMPAIGN] Found {len(relationships) if relationships else 0} attack pattern relationships")
+
+                    # Extract attack patterns from relationships
+                    patterns = []
+                    if relationships:
+                        for rel in relationships:
+                            try:
+                                to_entity = rel.get('to')
+                                if to_entity:
+                                    pattern_id = to_entity.get('id')
+                                    pattern_name = to_entity.get('name', 'Unknown')
+                                    x_mitre_id = to_entity.get('x_mitre_id', '')
+
+                                    patterns.append({
+                                        "id": pattern_id,
+                                        "name": pattern_name,
+                                        "x_mitre_id": x_mitre_id
+                                    })
+
+                                    if self.debug:
+                                        self.logger.info(f"[CAMPAIGN] Added: {pattern_name} ({x_mitre_id})")
+
+                            except Exception as e:
+                                if self.debug:
+                                    self.logger.warning(f"[CAMPAIGN] Error processing relationship: {e}")
+                                continue
+
+                    if self.debug:
+                        self.logger.info(f"[CAMPAIGN] Total patterns extracted: {len(patterns)}")
 
                     return {
-                        "campaign_name": data.get("name", campaign_name),
+                        "campaign_name": campaign_name_actual,
                         "campaign_id": campaign_id,
-                        "campaign_description": data.get("description", ""),
-                        "first_seen": data.get("first_seen"),
-                        "last_seen": data.get("last_seen"),
+                        "campaign_description": campaign_description,
+                        "first_seen": first_seen,
+                        "last_seen": last_seen,
                         "found": True,
                         "threat_actors": [],  # Could be extended
                         "attack_patterns": patterns,
@@ -1568,7 +1616,11 @@ class OpenCTIClient:
                     }
 
                 except Exception as e:
-                    self.logger.warning(f"GraphQL query failed: {e}")
+                    if self.debug:
+                        self.logger.error(f"[CAMPAIGN] Error getting details:")
+                        self.logger.error(f"[CAMPAIGN] {str(e)}")
+                        self.logger.error(f"[CAMPAIGN] Traceback:\n{traceback.format_exc()}")
+
                     return {
                         "campaign_name": campaign_name,
                         "campaign_id": campaign_id,
@@ -1581,7 +1633,7 @@ class OpenCTIClient:
                     }
 
             result = await asyncio.get_event_loop().run_in_executor(
-                self._executor, _query_campaign_details
+                self._executor, _get_details
             )
 
             self.logger.info(f"Retrieved campaign details for {campaign_name}")
