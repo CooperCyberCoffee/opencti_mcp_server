@@ -118,28 +118,16 @@ class OpenCTIClient:
             client = await self._get_client()
 
             def _check_version():
-                # Get platform version via GraphQL query (pycti 6.x method)
+                # Get platform version using pycti health_check method
                 version = "unknown"
                 try:
-                    # Query the about endpoint for version information
-                    query = """
-                        query {
-                            about {
-                                version
-                            }
-                        }
-                    """
-                    about_result = client.query(query)
-                    version = about_result.get('data', {}).get('about', {}).get('version', 'unknown')
+                    # Use pycti health_check method
+                    health = client.health_check()
+                    if isinstance(health, dict):
+                        version = health.get('version', 'unknown')
                 except Exception as e:
-                    self.logger.warning(f"Could not retrieve version via GraphQL: {e}")
-                    # Try alternative method - check if health_check method exists
-                    try:
-                        health = client.health_check()
-                        if isinstance(health, dict):
-                            version = health.get('version', 'unknown')
-                    except Exception:
-                        self.logger.warning("Could not determine OpenCTI version, continuing anyway")
+                    self.logger.warning(f"Could not retrieve version via health_check: {e}")
+                    self.logger.warning("Could not determine OpenCTI version, continuing anyway")
 
                 # Check for indicators (basic data availability)
                 has_indicators = False
@@ -1245,37 +1233,34 @@ class OpenCTIClient:
                             "attack_patterns": []
                         }
 
-                    # Extract attack patterns from relationships
+                    # Get full attack pattern details using pycti - no GraphQL!
                     patterns = []
                     for rel in relationships[:limit]:
                         try:
-                            # The 'to' field contains the attack pattern
                             to_entity = rel.get('to')
-                            if to_entity:
-                                # Already have basic info in the relationship
-                                pattern_id = to_entity.get('id')
-                                pattern_name = to_entity.get('name', 'Unknown')
-                                pattern_description = to_entity.get('description', '')
-                                x_mitre_id = to_entity.get('x_mitre_id', '')
+                            if not to_entity:
+                                continue
 
-                                # Get kill chain phases if available
-                                kill_chain_phases = []
-                                if 'killChainPhases' in to_entity:
-                                    kill_chain_phases = [
-                                        phase.get('phase_name', '')
-                                        for phase in to_entity.get('killChainPhases', [])
-                                    ]
+                            ttp_id = to_entity.get('id')
+                            if not ttp_id:
+                                continue
 
+                            # Get complete attack pattern details with pycti
+                            ttp = client.attack_pattern.read(id=ttp_id)
+                            if ttp:
                                 patterns.append({
-                                    "id": pattern_id,
-                                    "name": pattern_name,
-                                    "description": pattern_description[:500] if pattern_description else "",
-                                    "x_mitre_id": x_mitre_id,
-                                    "kill_chain_phases": kill_chain_phases
+                                    "id": ttp.get('id'),
+                                    "name": ttp.get('name'),
+                                    "description": ttp.get('description', '')[:500],
+                                    "x_mitre_id": ttp.get('x_mitre_id', ''),
+                                    "kill_chain_phases": [
+                                        phase.get('phase_name', '')
+                                        for phase in ttp.get('killChainPhases', []) or []
+                                    ]
                                 })
 
                                 if self.debug:
-                                    self.logger.info(f"[TTP] Added: {pattern_name} ({x_mitre_id})")
+                                    self.logger.info(f"[TTP] Added: {ttp.get('name')} ({ttp.get('x_mitre_id')})")
 
                         except Exception as e:
                             if self.debug:
@@ -1289,8 +1274,10 @@ class OpenCTIClient:
                         "actor_name": actor_name_actual,
                         "actor_id": actor_id,
                         "actor_description": actor_description,
+                        "aliases": actor_data.get('aliases', []),
                         "found": True,
-                        "attack_patterns": patterns
+                        "attack_patterns": patterns,
+                        "total_ttps": len(patterns)
                     }
 
                 except Exception as e:
@@ -1408,35 +1395,35 @@ class OpenCTIClient:
                     if self.debug:
                         self.logger.info(f"[MALWARE] Found {len(relationships) if relationships else 0} relationships")
 
-                    # Extract attack patterns from relationships
+                    # Get full attack pattern details using pycti - no GraphQL!
                     patterns = []
                     if relationships:
                         for rel in relationships[:limit]:
                             try:
                                 to_entity = rel.get('to')
-                                if to_entity:
-                                    pattern_id = to_entity.get('id')
-                                    pattern_name = to_entity.get('name', 'Unknown')
-                                    pattern_description = to_entity.get('description', '')
-                                    x_mitre_id = to_entity.get('x_mitre_id', '')
+                                if not to_entity:
+                                    continue
 
-                                    kill_chain_phases = []
-                                    if 'killChainPhases' in to_entity:
-                                        kill_chain_phases = [
-                                            phase.get('phase_name', '')
-                                            for phase in to_entity.get('killChainPhases', [])
-                                        ]
+                                ttp_id = to_entity.get('id')
+                                if not ttp_id:
+                                    continue
 
+                                # Get complete attack pattern details with pycti
+                                ttp = client.attack_pattern.read(id=ttp_id)
+                                if ttp:
                                     patterns.append({
-                                        "id": pattern_id,
-                                        "name": pattern_name,
-                                        "description": pattern_description[:500] if pattern_description else "",
-                                        "x_mitre_id": x_mitre_id,
-                                        "kill_chain_phases": kill_chain_phases
+                                        "id": ttp.get('id'),
+                                        "name": ttp.get('name'),
+                                        "description": ttp.get('description', '')[:500],
+                                        "x_mitre_id": ttp.get('x_mitre_id', ''),
+                                        "kill_chain_phases": [
+                                            phase.get('phase_name', '')
+                                            for phase in ttp.get('killChainPhases', []) or []
+                                        ]
                                     })
 
                                     if self.debug:
-                                        self.logger.info(f"[MALWARE] Added: {pattern_name} ({x_mitre_id})")
+                                        self.logger.info(f"[MALWARE] Added: {ttp.get('name')} ({ttp.get('x_mitre_id')})")
 
                             except Exception as e:
                                 if self.debug:
@@ -1451,8 +1438,10 @@ class OpenCTIClient:
                         "malware_id": malware_id,
                         "malware_description": malware_description,
                         "malware_types": malware_types,
+                        "aliases": malware_data.get('aliases', []),
                         "found": True,
                         "attack_patterns": patterns,
+                        "total_techniques": len(patterns),
                         "threat_actors": []  # Could be extended with additional query
                     }
 
@@ -1574,25 +1563,35 @@ class OpenCTIClient:
                     if self.debug:
                         self.logger.info(f"[CAMPAIGN] Found {len(relationships) if relationships else 0} attack pattern relationships")
 
-                    # Extract attack patterns from relationships
+                    # Get full attack pattern details using pycti - no GraphQL!
                     patterns = []
                     if relationships:
                         for rel in relationships:
                             try:
                                 to_entity = rel.get('to')
-                                if to_entity:
-                                    pattern_id = to_entity.get('id')
-                                    pattern_name = to_entity.get('name', 'Unknown')
-                                    x_mitre_id = to_entity.get('x_mitre_id', '')
+                                if not to_entity:
+                                    continue
 
+                                ttp_id = to_entity.get('id')
+                                if not ttp_id:
+                                    continue
+
+                                # Get complete attack pattern details with pycti
+                                ttp = client.attack_pattern.read(id=ttp_id)
+                                if ttp:
                                     patterns.append({
-                                        "id": pattern_id,
-                                        "name": pattern_name,
-                                        "x_mitre_id": x_mitre_id
+                                        "id": ttp.get('id'),
+                                        "name": ttp.get('name'),
+                                        "description": ttp.get('description', '')[:500],
+                                        "x_mitre_id": ttp.get('x_mitre_id', ''),
+                                        "kill_chain_phases": [
+                                            phase.get('phase_name', '')
+                                            for phase in ttp.get('killChainPhases', []) or []
+                                        ]
                                     })
 
                                     if self.debug:
-                                        self.logger.info(f"[CAMPAIGN] Added: {pattern_name} ({x_mitre_id})")
+                                        self.logger.info(f"[CAMPAIGN] Added: {ttp.get('name')} ({ttp.get('x_mitre_id', '')})")
 
                             except Exception as e:
                                 if self.debug:
@@ -1602,17 +1601,91 @@ class OpenCTIClient:
                     if self.debug:
                         self.logger.info(f"[CAMPAIGN] Total patterns extracted: {len(patterns)}")
 
+                    # Get attributed-to relationships (threat actors)
+                    threat_actor_rels = client.stix_core_relationship.list(
+                        fromId=campaign_id,
+                        relationship_type='attributed-to',
+                        toTypes=['Intrusion-Set', 'Threat-Actor'],
+                        first=20
+                    )
+
+                    threat_actors = []
+                    if threat_actor_rels:
+                        for rel in threat_actor_rels:
+                            try:
+                                to_entity = rel.get('to')
+                                if not to_entity:
+                                    continue
+
+                                actor_id = to_entity.get('id')
+                                if not actor_id:
+                                    continue
+
+                                # Get complete threat actor details with pycti
+                                actor = client.intrusion_set.read(id=actor_id)
+                                if actor:
+                                    threat_actors.append({
+                                        "id": actor.get('id'),
+                                        "name": actor.get('name'),
+                                        "description": actor.get('description', '')[:300],
+                                        "aliases": actor.get('aliases', [])
+                                    })
+
+                            except Exception as e:
+                                if self.debug:
+                                    self.logger.warning(f"[CAMPAIGN] Error processing threat actor: {e}")
+                                continue
+
+                    # Get uses relationships to malware
+                    malware_rels = client.stix_core_relationship.list(
+                        fromId=campaign_id,
+                        relationship_type='uses',
+                        toTypes=['Malware'],
+                        first=20
+                    )
+
+                    malware_list = []
+                    if malware_rels:
+                        for rel in malware_rels:
+                            try:
+                                to_entity = rel.get('to')
+                                if not to_entity:
+                                    continue
+
+                                malware_id = to_entity.get('id')
+                                if not malware_id:
+                                    continue
+
+                                # Get complete malware details with pycti
+                                malware = client.malware.read(id=malware_id)
+                                if malware:
+                                    malware_list.append({
+                                        "id": malware.get('id'),
+                                        "name": malware.get('name'),
+                                        "description": malware.get('description', '')[:300],
+                                        "aliases": malware.get('aliases', [])
+                                    })
+
+                            except Exception as e:
+                                if self.debug:
+                                    self.logger.warning(f"[CAMPAIGN] Error processing malware: {e}")
+                                continue
+
                     return {
                         "campaign_name": campaign_name_actual,
                         "campaign_id": campaign_id,
                         "campaign_description": campaign_description,
                         "first_seen": first_seen,
                         "last_seen": last_seen,
+                        "aliases": campaign_data.get('aliases', []),
                         "found": True,
-                        "threat_actors": [],  # Could be extended
+                        "threat_actors": threat_actors,
                         "attack_patterns": patterns,
-                        "malware": [],  # Could be extended
-                        "targets": []  # Could be extended
+                        "malware": malware_list,
+                        "targets": [],  # Could be extended to get targets relationships
+                        "total_threat_actors": len(threat_actors),
+                        "total_attack_patterns": len(patterns),
+                        "total_malware": len(malware_list)
                     }
 
                 except Exception as e:
@@ -1669,95 +1742,138 @@ class OpenCTIClient:
             client = await self._get_client()
 
             def _get_relationships():
+                import traceback
                 try:
-                    # Use GraphQL to query relationships with target entity details
-                    query = """
-                        query GetEntityRelationships($id: String!) {
-                            stixDomainObject(id: $id) {
-                                id
-                                entity_type
-                                ... on StixDomainObject {
-                                    name
-                                    stixCoreRelationships {
-                                        edges {
-                                            node {
-                                                id
-                                                relationship_type
-                                                from {
-                                                    ... on BasicObject {
-                                                        id
-                                                        entity_type
-                                                    }
-                                                    ... on StixDomainObject {
-                                                        name
-                                                        description
-                                                    }
-                                                }
-                                                to {
-                                                    ... on BasicObject {
-                                                        id
-                                                        entity_type
-                                                    }
-                                                    ... on StixDomainObject {
-                                                        name
-                                                        description
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    """
+                    # Use pycti methods to query relationships - no GraphQL!
+                    if self.debug:
+                        self.logger.info(f"[RELATIONSHIPS] Getting relationships for {entity_id}")
 
-                    result = client.query(query, {"id": entity_id})
-                    data = result.get("data", {}).get("stixDomainObject", {})
+                    # Get entity details first to determine name and type
+                    # Try common entity types
+                    entity_name = "Unknown"
+                    entity_type_str = "Unknown"
+                    entity_data = None
 
-                    if not data:
-                        return None
-
-                    entity_name = data.get("name", "Unknown")
-                    entity_type = data.get("entity_type", "Unknown")
-
-                    relationships = []
-                    relationships_data = data.get("stixCoreRelationships", {})
-                    edges = relationships_data.get("edges", []) if relationships_data else []
-
-                    for edge in edges[:limit]:
-                        node = edge.get("node", {})
-                        rel_type = node.get("relationship_type")
-
-                        # Filter by relationship type if specified
-                        if relationship_type and rel_type != relationship_type:
+                    for entity_type_check, client_attr in [
+                        ('Intrusion-Set', 'intrusion_set'),
+                        ('Malware', 'malware'),
+                        ('Campaign', 'campaign'),
+                        ('Attack-Pattern', 'attack_pattern'),
+                        ('Threat-Actor', 'threat_actor'),
+                        ('Vulnerability', 'vulnerability'),
+                        ('Indicator', 'indicator')
+                    ]:
+                        try:
+                            entity_client = getattr(client, client_attr)
+                            entity_data = entity_client.read(id=entity_id)
+                            if entity_data:
+                                entity_name = entity_data.get('name', 'Unknown')
+                                entity_type_str = entity_type_check
+                                if self.debug:
+                                    self.logger.info(f"[RELATIONSHIPS] Found entity: {entity_name} ({entity_type_str})")
+                                break
+                        except:
                             continue
 
-                        from_entity = node.get("from", {})
-                        to_entity = node.get("to", {})
+                    if not entity_data:
+                        if self.debug:
+                            self.logger.warning(f"[RELATIONSHIPS] Could not read entity {entity_id}")
+                        return None
 
-                        # Determine target entity (the one that's not the source entity)
-                        target = to_entity if from_entity.get("id") == entity_id else from_entity
+                    # Get all relationships FROM this entity
+                    from_rels = client.stix_core_relationship.list(
+                        fromId=entity_id,
+                        first=limit
+                    )
 
-                        relationships.append({
-                            "relationship_id": node.get("id"),
-                            "relationship_type": rel_type,
-                            "target": {
-                                "id": target.get("id"),
-                                "entity_type": target.get("entity_type", "Unknown"),
-                                "name": target.get("name", "Unknown"),
-                                "description": target.get("description", "")
-                            }
-                        })
+                    # Get all relationships TO this entity
+                    to_rels = client.stix_core_relationship.list(
+                        toId=entity_id,
+                        first=limit
+                    )
+
+                    if self.debug:
+                        self.logger.info(f"[RELATIONSHIPS] Found {len(from_rels) if from_rels else 0} outbound, {len(to_rels) if to_rels else 0} inbound relationships")
+
+                    relationships = []
+
+                    # Process outbound relationships (from this entity)
+                    if from_rels:
+                        for rel in from_rels:
+                            try:
+                                rel_type = rel.get('relationship_type')
+
+                                # Filter by relationship type if specified
+                                if relationship_type and rel_type != relationship_type:
+                                    continue
+
+                                to_entity = rel.get('to')
+                                if not to_entity:
+                                    continue
+
+                                relationships.append({
+                                    "relationship_id": rel.get('id'),
+                                    "relationship_type": rel_type,
+                                    "direction": "outbound",
+                                    "target": {
+                                        "id": to_entity.get('id'),
+                                        "entity_type": to_entity.get('entity_type', 'Unknown'),
+                                        "name": to_entity.get('name', 'Unknown'),
+                                        "description": to_entity.get('description', '')[:200]
+                                    }
+                                })
+
+                            except Exception as e:
+                                if self.debug:
+                                    self.logger.warning(f"[RELATIONSHIPS] Error processing outbound rel: {e}")
+                                continue
+
+                    # Process inbound relationships (to this entity)
+                    if to_rels:
+                        for rel in to_rels:
+                            try:
+                                rel_type = rel.get('relationship_type')
+
+                                # Filter by relationship type if specified
+                                if relationship_type and rel_type != relationship_type:
+                                    continue
+
+                                from_entity = rel.get('from')
+                                if not from_entity:
+                                    continue
+
+                                relationships.append({
+                                    "relationship_id": rel.get('id'),
+                                    "relationship_type": rel_type,
+                                    "direction": "inbound",
+                                    "target": {
+                                        "id": from_entity.get('id'),
+                                        "entity_type": from_entity.get('entity_type', 'Unknown'),
+                                        "name": from_entity.get('name', 'Unknown'),
+                                        "description": from_entity.get('description', '')[:200]
+                                    }
+                                })
+
+                            except Exception as e:
+                                if self.debug:
+                                    self.logger.warning(f"[RELATIONSHIPS] Error processing inbound rel: {e}")
+                                continue
+
+                    if self.debug:
+                        self.logger.info(f"[RELATIONSHIPS] Total relationships returned: {len(relationships)}")
 
                     return {
                         "entity_id": entity_id,
                         "entity_name": entity_name,
-                        "entity_type": entity_type,
+                        "entity_type": entity_type_str,
                         "relationships": relationships
                     }
 
                 except Exception as e:
-                    self.logger.warning(f"GraphQL relationship query failed: {e}")
+                    if self.debug:
+                        self.logger.error(f"[RELATIONSHIPS] Error getting relationships:")
+                        self.logger.error(f"[RELATIONSHIPS] {str(e)}")
+                        self.logger.error(f"[RELATIONSHIPS] Traceback:\n{traceback.format_exc()}")
                     return None
 
             result = await asyncio.get_event_loop().run_in_executor(
