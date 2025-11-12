@@ -192,6 +192,196 @@ def get_mcp_tools() -> List[Tool]:
                     }
                 }
             }
+        ),
+
+        Tool(
+            name="get_attack_patterns",
+            description=(
+                "Query MITRE ATT&CK techniques and tactics from OpenCTI. Retrieves "
+                "attack patterns with descriptions, kill chain phases, and associated "
+                "threat intelligence. Access the 452K+ MITRE ATT&CK techniques in your "
+                "OpenCTI instance."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                        "description": "Number of attack patterns to retrieve (1-100)"
+                    },
+                    "search_term": {
+                        "type": "string",
+                        "description": (
+                            "Optional search term to filter attack patterns "
+                            "(e.g., 'phishing', 'lateral movement', 'T1059')"
+                        )
+                    },
+                    "analysis_type": {
+                        "type": "string",
+                        "enum": [
+                            "executive",
+                            "technical",
+                            "incident_response"
+                        ],
+                        "default": "technical",
+                        "description": (
+                            "Type of professional analysis template to apply:\n"
+                            "- executive: High-level threat summaries\n"
+                            "- technical: Detailed TTP analysis\n"
+                            "- incident_response: Detection and response guidance"
+                        )
+                    }
+                }
+            }
+        ),
+
+        Tool(
+            name="get_vulnerabilities",
+            description=(
+                "Query CVEs and vulnerabilities from OpenCTI with severity filtering. "
+                "Retrieves vulnerability details including CVE IDs, CVSS scores, "
+                "descriptions, and associated threat intelligence. Access CISA KEV "
+                "and other vulnerability databases."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                        "description": "Number of vulnerabilities to retrieve (1-100)"
+                    },
+                    "search_term": {
+                        "type": "string",
+                        "description": (
+                            "Optional search term to filter vulnerabilities "
+                            "(e.g., 'CVE-2024-1234', 'Microsoft', 'remote code execution')"
+                        )
+                    },
+                    "min_severity": {
+                        "type": "string",
+                        "enum": ["critical", "high", "medium", "low", "none"],
+                        "default": "none",
+                        "description": (
+                            "Minimum severity level to include:\n"
+                            "- critical: CVSS 9.0-10.0\n"
+                            "- high: CVSS 7.0-8.9\n"
+                            "- medium: CVSS 4.0-6.9\n"
+                            "- low: CVSS 0.1-3.9\n"
+                            "- none: All vulnerabilities"
+                        )
+                    },
+                    "analysis_type": {
+                        "type": "string",
+                        "enum": [
+                            "executive",
+                            "technical",
+                            "incident_response"
+                        ],
+                        "default": "technical",
+                        "description": "Type of professional analysis template to apply"
+                    }
+                }
+            }
+        ),
+
+        Tool(
+            name="get_malware",
+            description=(
+                "Query malware families and samples from OpenCTI. Retrieves malware "
+                "names, descriptions, capabilities, and associated threat intelligence. "
+                "Includes ransomware, trojans, backdoors, and other malware types."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                        "description": "Number of malware entries to retrieve (1-100)"
+                    },
+                    "search_term": {
+                        "type": "string",
+                        "description": (
+                            "Optional search term to filter malware "
+                            "(e.g., 'ransomware', 'cobalt strike', 'emotet')"
+                        )
+                    },
+                    "analysis_type": {
+                        "type": "string",
+                        "enum": [
+                            "executive",
+                            "technical",
+                            "incident_response"
+                        ],
+                        "default": "technical",
+                        "description": "Type of professional analysis template to apply"
+                    }
+                }
+            }
+        ),
+
+        Tool(
+            name="search_entities",
+            description=(
+                "General entity search across all OpenCTI entity types. Search for "
+                "threat actors, campaigns, intrusion sets, tools, and more. Flexible "
+                "search across the entire OpenCTI knowledge base."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "search_term": {
+                        "type": "string",
+                        "description": "Search term to find entities (required)"
+                    },
+                    "entity_types": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "Threat-Actor",
+                                "Intrusion-Set",
+                                "Campaign",
+                                "Malware",
+                                "Tool",
+                                "Attack-Pattern",
+                                "Vulnerability",
+                                "Indicator",
+                                "all"
+                            ]
+                        },
+                        "default": ["all"],
+                        "description": (
+                            "Entity types to search:\n"
+                            "- Threat-Actor: APT groups, cybercrime actors\n"
+                            "- Intrusion-Set: Coordinated threat campaigns\n"
+                            "- Campaign: Specific attack campaigns\n"
+                            "- Malware: Malware families\n"
+                            "- Tool: Hacking tools and frameworks\n"
+                            "- Attack-Pattern: MITRE ATT&CK techniques\n"
+                            "- Vulnerability: CVEs and vulnerabilities\n"
+                            "- Indicator: IOCs (hashes, IPs, domains)\n"
+                            "- all: Search across all types"
+                        )
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 10,
+                        "description": "Maximum number of results to return (1-50)"
+                    }
+                },
+                "required": ["search_term"]
+            }
         )
     ]
 
@@ -227,5 +417,25 @@ def get_tool_descriptions() -> dict:
             "Generate comprehensive threat landscape summaries with professional "
             "analysis templates. Aggregates indicators across timeframes and "
             "produces executive or technical views of the threat environment."
+        ),
+        "get_attack_patterns": (
+            "Query MITRE ATT&CK techniques and tactics with optional search "
+            "filtering. Retrieves attack patterns with descriptions, kill chain "
+            "phases, and professional analysis templates for TTP understanding."
+        ),
+        "get_vulnerabilities": (
+            "Query CVEs and vulnerabilities with severity filtering. Retrieves "
+            "vulnerability details including CVSS scores, descriptions, and "
+            "associated threat intelligence from CISA KEV and other sources."
+        ),
+        "get_malware": (
+            "Query malware families and samples with optional search filtering. "
+            "Retrieves malware names, descriptions, capabilities, and associated "
+            "threat intelligence for ransomware, trojans, and other malware types."
+        ),
+        "search_entities": (
+            "General entity search across all OpenCTI entity types. Flexible "
+            "search for threat actors, campaigns, intrusion sets, tools, and "
+            "more across the entire OpenCTI knowledge base."
         )
     }

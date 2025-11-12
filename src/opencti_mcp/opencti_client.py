@@ -306,6 +306,312 @@ class OpenCTIClient:
             self.logger.error(f"Hash search failed: {e}")
             raise
 
+    async def get_attack_patterns(
+        self,
+        limit: int = 20,
+        search_term: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get MITRE ATT&CK techniques and attack patterns.
+
+        Args:
+            limit: Maximum number of attack patterns to retrieve (default: 20)
+            search_term: Optional search term to filter results
+
+        Returns:
+            List of attack pattern dictionaries with formatted data
+
+        Example:
+            >>> patterns = await client.get_attack_patterns(
+            ...     limit=10,
+            ...     search_term="phishing"
+            ... )
+            >>> print(f"Found {len(patterns)} attack patterns")
+        """
+        try:
+            client = await self._get_client()
+
+            def _get_attack_patterns():
+                # Build search parameters
+                kwargs = {"first": limit, "orderBy": "created_at", "orderMode": "desc"}
+
+                if search_term:
+                    kwargs["search"] = search_term
+
+                # Get attack patterns
+                attack_patterns = client.attack_pattern.list(**kwargs)
+
+                # Format for MCP consumption
+                formatted = []
+                for pattern in attack_patterns:
+                    formatted_pattern = {
+                        "id": pattern.get("id"),
+                        "name": pattern.get("name"),
+                        "description": pattern.get("description", "No description available"),
+                        "x_mitre_id": pattern.get("x_mitre_id"),
+                        "created_at": pattern.get("created_at"),
+                        "kill_chain_phases": [
+                            phase.get("phase_name", "unknown")
+                            for phase in pattern.get("killChainPhases", [])
+                        ],
+                        "labels": [label.get("value") for label in pattern.get("objectLabel", [])]
+                    }
+                    formatted.append(formatted_pattern)
+
+                return formatted
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                self._executor, _get_attack_patterns
+            )
+
+            self.logger.info(f"Retrieved {len(result)} attack patterns")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Failed to get attack patterns: {e}")
+            raise
+
+    async def get_vulnerabilities(
+        self,
+        limit: int = 20,
+        search_term: Optional[str] = None,
+        min_severity: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get CVEs and vulnerabilities from OpenCTI.
+
+        Args:
+            limit: Maximum number of vulnerabilities to retrieve (default: 20)
+            search_term: Optional search term to filter results
+            min_severity: Minimum severity level (critical, high, medium, low)
+
+        Returns:
+            List of vulnerability dictionaries with formatted data
+
+        Example:
+            >>> vulns = await client.get_vulnerabilities(
+            ...     limit=10,
+            ...     min_severity="high"
+            ... )
+            >>> print(f"Found {len(vulns)} vulnerabilities")
+        """
+        try:
+            client = await self._get_client()
+
+            def _get_vulnerabilities():
+                # Build search parameters
+                kwargs = {"first": limit, "orderBy": "created_at", "orderMode": "desc"}
+
+                if search_term:
+                    kwargs["search"] = search_term
+
+                # Get vulnerabilities
+                vulnerabilities = client.vulnerability.list(**kwargs)
+
+                # Format for MCP consumption
+                formatted = []
+                for vuln in vulnerabilities:
+                    # Get severity score
+                    cvss_score = vuln.get("x_opencti_cvss_base_score", 0)
+
+                    # Determine severity level
+                    if cvss_score >= 9.0:
+                        severity = "Critical"
+                    elif cvss_score >= 7.0:
+                        severity = "High"
+                    elif cvss_score >= 4.0:
+                        severity = "Medium"
+                    elif cvss_score > 0:
+                        severity = "Low"
+                    else:
+                        severity = "Unknown"
+
+                    # Apply severity filter if specified
+                    if min_severity:
+                        min_score_map = {
+                            "critical": 9.0,
+                            "high": 7.0,
+                            "medium": 4.0,
+                            "low": 0.1
+                        }
+                        if min_severity in min_score_map and cvss_score < min_score_map[min_severity]:
+                            continue
+
+                    formatted_vuln = {
+                        "id": vuln.get("id"),
+                        "name": vuln.get("name"),
+                        "description": vuln.get("description", "No description available")[:500],
+                        "cvss_score": cvss_score,
+                        "severity": severity,
+                        "created_at": vuln.get("created_at"),
+                        "labels": [label.get("value") for label in vuln.get("objectLabel", [])]
+                    }
+                    formatted.append(formatted_vuln)
+
+                return formatted
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                self._executor, _get_vulnerabilities
+            )
+
+            self.logger.info(f"Retrieved {len(result)} vulnerabilities")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Failed to get vulnerabilities: {e}")
+            raise
+
+    async def get_malware(
+        self,
+        limit: int = 20,
+        search_term: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get malware families and samples from OpenCTI.
+
+        Args:
+            limit: Maximum number of malware entries to retrieve (default: 20)
+            search_term: Optional search term to filter results
+
+        Returns:
+            List of malware dictionaries with formatted data
+
+        Example:
+            >>> malware = await client.get_malware(
+            ...     limit=10,
+            ...     search_term="ransomware"
+            ... )
+            >>> print(f"Found {len(malware)} malware families")
+        """
+        try:
+            client = await self._get_client()
+
+            def _get_malware():
+                # Build search parameters
+                kwargs = {"first": limit, "orderBy": "created_at", "orderMode": "desc"}
+
+                if search_term:
+                    kwargs["search"] = search_term
+
+                # Get malware
+                malware_list = client.malware.list(**kwargs)
+
+                # Format for MCP consumption
+                formatted = []
+                for malware in malware_list:
+                    formatted_malware = {
+                        "id": malware.get("id"),
+                        "name": malware.get("name"),
+                        "description": malware.get("description", "No description available")[:500],
+                        "malware_types": malware.get("malware_types", []),
+                        "is_family": malware.get("is_family", False),
+                        "created_at": malware.get("created_at"),
+                        "labels": [label.get("value") for label in malware.get("objectLabel", [])]
+                    }
+                    formatted.append(formatted_malware)
+
+                return formatted
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                self._executor, _get_malware
+            )
+
+            self.logger.info(f"Retrieved {len(result)} malware entries")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Failed to get malware: {e}")
+            raise
+
+    async def search_entities(
+        self,
+        search_term: str,
+        entity_types: List[str] = ["all"],
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """General entity search across OpenCTI knowledge base.
+
+        Args:
+            search_term: Search term to find entities
+            entity_types: List of entity types to search (default: ["all"])
+            limit: Maximum number of results to return (default: 10)
+
+        Returns:
+            List of entity dictionaries with formatted data
+
+        Example:
+            >>> results = await client.search_entities(
+            ...     search_term="APT29",
+            ...     entity_types=["Threat-Actor", "Campaign"]
+            ... )
+            >>> print(f"Found {len(results)} entities")
+        """
+        try:
+            client = await self._get_client()
+
+            def _search_entities():
+                formatted = []
+
+                # Map entity types to client methods
+                entity_method_map = {
+                    "Threat-Actor": client.threat_actor,
+                    "Intrusion-Set": client.intrusion_set,
+                    "Campaign": client.campaign,
+                    "Malware": client.malware,
+                    "Tool": client.tool,
+                    "Attack-Pattern": client.attack_pattern,
+                    "Vulnerability": client.vulnerability,
+                    "Indicator": client.indicator
+                }
+
+                # Determine which entity types to search
+                search_types = []
+                if "all" in entity_types:
+                    search_types = list(entity_method_map.keys())
+                else:
+                    search_types = [t for t in entity_types if t in entity_method_map]
+
+                # Search each entity type
+                per_type_limit = max(1, limit // len(search_types)) if search_types else limit
+
+                for entity_type in search_types:
+                    try:
+                        entity_client = entity_method_map[entity_type]
+                        results = entity_client.list(
+                            search=search_term,
+                            first=per_type_limit
+                        )
+
+                        for entity in results:
+                            formatted_entity = {
+                                "id": entity.get("id"),
+                                "entity_type": entity_type,
+                                "name": entity.get("name"),
+                                "description": entity.get("description", "No description available")[:300],
+                                "created_at": entity.get("created_at"),
+                                "labels": [label.get("value") for label in entity.get("objectLabel", [])]
+                            }
+                            formatted.append(formatted_entity)
+
+                            if len(formatted) >= limit:
+                                break
+                    except Exception as e:
+                        self.logger.warning(f"Failed to search {entity_type}: {e}")
+                        continue
+
+                    if len(formatted) >= limit:
+                        break
+
+                return formatted[:limit]
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                self._executor, _search_entities
+            )
+
+            self.logger.info(f"Entity search returned {len(result)} results")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Entity search failed: {e}")
+            raise
+
     async def close(self):
         """Close the client and clean up resources."""
         if self._executor:

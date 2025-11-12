@@ -104,6 +104,18 @@ class OpenCTIMCPServer:
                 elif name == "get_threat_landscape_summary":
                     return await self._handle_threat_landscape_summary(arguments)
 
+                elif name == "get_attack_patterns":
+                    return await self._handle_get_attack_patterns(arguments)
+
+                elif name == "get_vulnerabilities":
+                    return await self._handle_get_vulnerabilities(arguments)
+
+                elif name == "get_malware":
+                    return await self._handle_get_malware(arguments)
+
+                elif name == "search_entities":
+                    return await self._handle_search_entities(arguments)
+
                 else:
                     error_msg = f"Unknown tool: {name}"
                     self.logger.error("unknown_tool", tool=name)
@@ -458,6 +470,339 @@ class OpenCTIMCPServer:
         )
 
         return [TextContent(type="text", text=final_output)]
+
+    async def _handle_get_attack_patterns(self, args: dict) -> list[TextContent]:
+        """Handle get_attack_patterns tool.
+
+        Args:
+            args: Tool arguments including limit, search_term, analysis_type
+
+        Returns:
+            List containing TextContent with formatted attack pattern analysis
+        """
+        limit = args.get("limit", 20)
+        search_term = args.get("search_term")
+        analysis_type = args.get("analysis_type", "technical")
+
+        self.logger.info(
+            "fetching_attack_patterns",
+            limit=limit,
+            search_term=search_term,
+            analysis_type=analysis_type
+        )
+
+        # Fetch attack patterns from OpenCTI
+        patterns = await self.opencti_client.get_attack_patterns(
+            limit=limit,
+            search_term=search_term
+        )
+
+        if not patterns:
+            search_info = f" matching '{search_term}'" if search_term else ""
+            return [TextContent(
+                type="text",
+                text=(
+                    f"ℹ️ No attack patterns found{search_info}.\n\n"
+                    "**Suggestions:**\n"
+                    "- Try a different search term\n"
+                    "- Remove search filters\n"
+                    "- Check if MITRE ATT&CK data is imported in OpenCTI\n"
+                )
+            )]
+
+        # Format output
+        output = (
+            f"# MITRE ATT&CK Techniques & Tactics\n\n"
+            f"**Total Patterns:** {len(patterns)}\n"
+        )
+
+        if search_term:
+            output += f"**Search Term:** {search_term}\n"
+
+        output += "\n---\n\n"
+
+        for idx, pattern in enumerate(patterns, 1):
+            output += f"## {idx}. {pattern.get('name', 'Unknown')}\n\n"
+
+            if pattern.get('x_mitre_id'):
+                output += f"- **MITRE ID:** {pattern['x_mitre_id']}\n"
+
+            output += f"- **Description:** {pattern.get('description', 'No description')[:500]}...\n"
+
+            kill_chain = pattern.get('kill_chain_phases', [])
+            if kill_chain:
+                output += f"- **Kill Chain Phases:** {', '.join(kill_chain)}\n"
+
+            labels = pattern.get('labels', [])
+            if labels:
+                output += f"- **Labels:** {', '.join(labels[:5])}\n"
+
+            output += "\n"
+
+        # Add analysis template guidance
+        template = AnalysisTemplates.get_template(analysis_type)
+        output += "\n---\n\n" + template
+
+        self.logger.info("attack_patterns_retrieved", count=len(patterns))
+
+        return [TextContent(type="text", text=output)]
+
+    async def _handle_get_vulnerabilities(self, args: dict) -> list[TextContent]:
+        """Handle get_vulnerabilities tool.
+
+        Args:
+            args: Tool arguments including limit, search_term, min_severity, analysis_type
+
+        Returns:
+            List containing TextContent with formatted vulnerability analysis
+        """
+        limit = args.get("limit", 20)
+        search_term = args.get("search_term")
+        min_severity = args.get("min_severity", "none")
+        analysis_type = args.get("analysis_type", "technical")
+
+        self.logger.info(
+            "fetching_vulnerabilities",
+            limit=limit,
+            search_term=search_term,
+            min_severity=min_severity,
+            analysis_type=analysis_type
+        )
+
+        # Fetch vulnerabilities from OpenCTI
+        vulns = await self.opencti_client.get_vulnerabilities(
+            limit=limit,
+            search_term=search_term,
+            min_severity=min_severity if min_severity != "none" else None
+        )
+
+        if not vulns:
+            search_info = f" matching '{search_term}'" if search_term else ""
+            severity_info = f" with severity >= {min_severity}" if min_severity != "none" else ""
+            return [TextContent(
+                type="text",
+                text=(
+                    f"ℹ️ No vulnerabilities found{search_info}{severity_info}.\n\n"
+                    "**Suggestions:**\n"
+                    "- Try a different search term\n"
+                    "- Adjust severity filter\n"
+                    "- Check if CVE data is imported in OpenCTI\n"
+                )
+            )]
+
+        # Calculate severity distribution
+        severity_counts = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Unknown": 0}
+        for vuln in vulns:
+            severity_counts[vuln.get("severity", "Unknown")] += 1
+
+        # Format output
+        output = (
+            f"# CVEs & Vulnerabilities\n\n"
+            f"**Total Vulnerabilities:** {len(vulns)}\n"
+        )
+
+        if search_term:
+            output += f"**Search Term:** {search_term}\n"
+
+        if min_severity != "none":
+            output += f"**Minimum Severity:** {min_severity.title()}\n"
+
+        output += "\n**Severity Distribution:**\n"
+        for severity, count in severity_counts.items():
+            if count > 0:
+                output += f"- {severity}: {count}\n"
+
+        output += "\n---\n\n"
+
+        for idx, vuln in enumerate(vulns, 1):
+            output += f"## {idx}. {vuln.get('name', 'Unknown')}\n\n"
+
+            cvss_score = vuln.get('cvss_score', 0)
+            severity = vuln.get('severity', 'Unknown')
+
+            if cvss_score > 0:
+                output += f"- **CVSS Score:** {cvss_score} ({severity})\n"
+
+            output += f"- **Description:** {vuln.get('description', 'No description')}\n"
+
+            labels = vuln.get('labels', [])
+            if labels:
+                output += f"- **Labels:** {', '.join(labels[:5])}\n"
+
+            output += "\n"
+
+        # Add analysis template guidance
+        template = AnalysisTemplates.get_template(analysis_type)
+        output += "\n---\n\n" + template
+
+        self.logger.info("vulnerabilities_retrieved", count=len(vulns))
+
+        return [TextContent(type="text", text=output)]
+
+    async def _handle_get_malware(self, args: dict) -> list[TextContent]:
+        """Handle get_malware tool.
+
+        Args:
+            args: Tool arguments including limit, search_term, analysis_type
+
+        Returns:
+            List containing TextContent with formatted malware analysis
+        """
+        limit = args.get("limit", 20)
+        search_term = args.get("search_term")
+        analysis_type = args.get("analysis_type", "technical")
+
+        self.logger.info(
+            "fetching_malware",
+            limit=limit,
+            search_term=search_term,
+            analysis_type=analysis_type
+        )
+
+        # Fetch malware from OpenCTI
+        malware_list = await self.opencti_client.get_malware(
+            limit=limit,
+            search_term=search_term
+        )
+
+        if not malware_list:
+            search_info = f" matching '{search_term}'" if search_term else ""
+            return [TextContent(
+                type="text",
+                text=(
+                    f"ℹ️ No malware found{search_info}.\n\n"
+                    "**Suggestions:**\n"
+                    "- Try a different search term\n"
+                    "- Remove search filters\n"
+                    "- Check if malware data is imported in OpenCTI\n"
+                )
+            )]
+
+        # Count malware types
+        type_counts = {}
+        for malware in malware_list:
+            for mtype in malware.get('malware_types', ['unknown']):
+                type_counts[mtype] = type_counts.get(mtype, 0) + 1
+
+        # Format output
+        output = (
+            f"# Malware Families & Samples\n\n"
+            f"**Total Entries:** {len(malware_list)}\n"
+        )
+
+        if search_term:
+            output += f"**Search Term:** {search_term}\n"
+
+        output += "\n**Malware Types:**\n"
+        for mtype, count in sorted(type_counts.items(), key=lambda x: x[1], reverse=True):
+            output += f"- {mtype}: {count}\n"
+
+        output += "\n---\n\n"
+
+        for idx, malware in enumerate(malware_list, 1):
+            output += f"## {idx}. {malware.get('name', 'Unknown')}\n\n"
+
+            if malware.get('is_family'):
+                output += "- **Type:** Malware Family\n"
+
+            mtypes = malware.get('malware_types', [])
+            if mtypes:
+                output += f"- **Malware Types:** {', '.join(mtypes)}\n"
+
+            output += f"- **Description:** {malware.get('description', 'No description')}\n"
+
+            labels = malware.get('labels', [])
+            if labels:
+                output += f"- **Labels:** {', '.join(labels[:5])}\n"
+
+            output += "\n"
+
+        # Add analysis template guidance
+        template = AnalysisTemplates.get_template(analysis_type)
+        output += "\n---\n\n" + template
+
+        self.logger.info("malware_retrieved", count=len(malware_list))
+
+        return [TextContent(type="text", text=output)]
+
+    async def _handle_search_entities(self, args: dict) -> list[TextContent]:
+        """Handle search_entities tool.
+
+        Args:
+            args: Tool arguments including search_term, entity_types, limit
+
+        Returns:
+            List containing TextContent with formatted entity search results
+        """
+        search_term = args.get("search_term", "")
+        entity_types = args.get("entity_types", ["all"])
+        limit = args.get("limit", 10)
+
+        if not search_term:
+            return [TextContent(
+                type="text",
+                text="❌ Error: search_term is required for entity search"
+            )]
+
+        self.logger.info(
+            "searching_entities",
+            search_term=search_term,
+            entity_types=entity_types,
+            limit=limit
+        )
+
+        # Search entities
+        results = await self.opencti_client.search_entities(
+            search_term=search_term,
+            entity_types=entity_types,
+            limit=limit
+        )
+
+        if not results:
+            return [TextContent(
+                type="text",
+                text=(
+                    f"ℹ️ No entities found matching '{search_term}'.\n\n"
+                    "**Suggestions:**\n"
+                    "- Try different search terms\n"
+                    "- Use more general keywords\n"
+                    "- Check if data is imported for the entity types you're searching\n"
+                )
+            )]
+
+        # Count by entity type
+        type_counts = {}
+        for entity in results:
+            etype = entity.get('entity_type', 'Unknown')
+            type_counts[etype] = type_counts.get(etype, 0) + 1
+
+        # Format output
+        output = (
+            f"# Entity Search Results\n\n"
+            f"**Search Term:** {search_term}\n"
+            f"**Total Results:** {len(results)}\n\n"
+            "**Entity Types:**\n"
+        )
+
+        for etype, count in sorted(type_counts.items(), key=lambda x: x[1], reverse=True):
+            output += f"- {etype}: {count}\n"
+
+        output += "\n---\n\n"
+
+        for idx, entity in enumerate(results, 1):
+            output += f"## {idx}. {entity.get('name', 'Unknown')}\n\n"
+            output += f"- **Entity Type:** {entity.get('entity_type', 'Unknown')}\n"
+            output += f"- **Description:** {entity.get('description', 'No description')}\n"
+
+            labels = entity.get('labels', [])
+            if labels:
+                output += f"- **Labels:** {', '.join(labels[:5])}\n"
+
+            output += "\n"
+
+        self.logger.info("entity_search_complete", results=len(results))
+
+        return [TextContent(type="text", text=output)]
 
     async def run(self):
         """Run the MCP server.
