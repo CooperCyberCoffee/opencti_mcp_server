@@ -1,0 +1,23 @@
+# Cooper Cyber Coffee OpenCTI MCP Server - Requirements
+# Copyright (c) 2025 Matthew Hopkins / Cooper Cyber Coffee
+
+# MCP Protocol Support
+mcp>=1.0.0
+
+# OpenCTI Official Python Client
+pycti>=6.0.0
+
+# Async HTTP Support
+aiohttp>=3.8.0
+
+# Environment Configuration
+python-dotenv>=1.0.0
+
+# Data Validation
+pydantic>=2.0.0
+
+# Logging and Monitoring
+structlog>=24.0.0
+
+# Type Hints Support
+typing-extensions>=4.0.0
