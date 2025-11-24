@@ -20,6 +20,11 @@ aiohttp>=3.9.0,<4.0.0
 # GHSA-9v9h-cgj8-h64p (MEDIUM), GHSA-h4gh-qq45-vh27 (HIGH)
 cryptography>=43.0.1,<44.0.0
 
+# Security - Cryptography Library (CVE fixes v0.4.2)
+# PYSEC-2024-225 (HIGH), GHSA-3ww4-gg4f-jr7f (HIGH)
+# GHSA-9v9h-cgj8-h64p (MEDIUM), GHSA-h4gh-qq45-vh27 (HIGH)
+cryptography>=43.0.1,<44.0.0
+
 # Environment Configuration
 python-dotenv>=1.0.0,<2.0.0
 
