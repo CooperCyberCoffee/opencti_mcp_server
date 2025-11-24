@@ -6,16 +6,19 @@ Licensed under the MIT License - see LICENSE.md for details
 Built by: Matthew Hopkins (https://linkedin.com/in/matthew-hopkins)
 Project: Cooper Cyber Coffee (https://coopercybercoffee.com)
 
-For consulting and enterprise inquiries: business@coopercybercoffee.com
+Contact: matt@coopercybercoffee.com
 """
 
 import logging
-from typing import Dict, List, Optional, Any, Tuple
+import time
+from typing import Dict, List, Optional, Any, Tuple, Callable, Awaitable
 from pycti import OpenCTIApiClient
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from datetime import datetime, timedelta
+
+from .exceptions import OperationCancelled
 
 
 class OpenCTIClient:
@@ -70,6 +73,11 @@ class OpenCTIClient:
         self._entity_cache = {}
         self._cache_ttl = timedelta(minutes=15)
 
+        # Marking registry for server-side TLP filtering (v0.4.0+)
+        # Will be initialized by server after TLP filter is loaded
+        self.marking_registry = None
+        self.tlp_filter = None
+
     async def _get_client(self) -> OpenCTIApiClient:
         """Lazy initialization of OpenCTI client with connection validation.
 
@@ -81,12 +89,14 @@ class OpenCTIClient:
         """
         if self._client is None:
             try:
+                # Set pycti log_level to ERROR to suppress verbose output
                 self._client = OpenCTIApiClient(
                     url=self.url,
                     token=self.token,
                     ssl_verify=self.ssl_verify,
-                    log_level="INFO"
+                    log_level="ERROR"
                 )
+                # Only log connection success at INFO level (no duplicate from pycti)
                 self.logger.info(f"Connected to OpenCTI at {self.url}")
             except Exception as e:
                 self.logger.error(f"Failed to initialize OpenCTI client: {e}")
@@ -99,7 +109,7 @@ class OpenCTIClient:
         Performs comprehensive validation including:
         - Version check (requires OpenCTI 6.x)
         - Database availability
-        - Connector status
+        - Connector status (optional)
         - Data availability
 
         Returns:
@@ -118,16 +128,14 @@ class OpenCTIClient:
             client = await self._get_client()
 
             def _check_version():
-                # Get platform version using pycti health_check method
+                # Get platform version using health_check method
                 version = "unknown"
                 try:
-                    # Use pycti health_check method
                     health = client.health_check()
                     if isinstance(health, dict):
                         version = health.get('version', 'unknown')
                 except Exception as e:
-                    self.logger.warning(f"Could not retrieve version via health_check: {e}")
-                    self.logger.warning("Could not determine OpenCTI version, continuing anyway")
+                    self.logger.debug(f"Could not retrieve version: {e}")
 
                 # Check for indicators (basic data availability)
                 has_indicators = False
@@ -135,15 +143,20 @@ class OpenCTIClient:
                     indicators = client.indicator.list(first=1)
                     has_indicators = len(indicators) > 0
                 except Exception as e:
-                    self.logger.warning(f"Could not check indicators: {e}")
+                    self.logger.debug(f"Could not check indicators: {e}")
 
-                # Check connectors
+                # Check connectors (optional - not critical for core functionality)
                 active_connectors = []
                 try:
-                    connectors = client.connector.list(first=5)
-                    active_connectors = [c for c in connectors if c.get('active', False)]
+                    connectors = client.connector.list()  # No parameters
+                    if connectors:
+                        active_connectors = [c for c in connectors if c.get('active', False)]
+                    else:
+                        active_connectors = []
                 except Exception as e:
-                    self.logger.warning(f"Could not check connectors: {e}")
+                    # Connector checking is optional - gracefully skip if API doesn't support it
+                    self.logger.debug(f"Connector check skipped (not critical): {e}")
+                    active_connectors = []
 
                 return {
                     "version": version,
@@ -161,12 +174,17 @@ class OpenCTIClient:
             version = result["version"]
             if version != "unknown" and not version.startswith("6."):
                 self.logger.warning(
-                    f"OpenCTI 6.x recommended for Cooper Cyber Coffee MCP Server. "
-                    f"Found version {version}. Some features may not work correctly."
+                    f"OpenCTI 6.x recommended. Found version {version}. Some features may not work correctly."
                 )
                 # Don't raise error, just warn - allow connection to proceed
 
-            self.logger.info(f"OpenCTI validation successful: {result}")
+            # Single concise success message
+            data_status = "data: available" if result["has_data"] else "data: empty"
+            connector_count = result["active_connectors"]
+            self.logger.info(
+                f"OpenCTI validation successful (version: {version}, {data_status}, connectors: {connector_count} active)"
+            )
+
             return result
 
         except Exception as e:
@@ -200,6 +218,297 @@ class OpenCTIClient:
         self._entity_cache[cache_key] = (data, datetime.now())
         if self.debug:
             self.logger.info(f"[DEBUG] Cached: {cache_key}")
+
+    async def initialize_marking_registry(self, tlp_filter):
+        """
+        Initialize marking registry for server-side filtering (v0.4.0+).
+
+        This queries OpenCTI for all marking definitions and builds
+        the name→UUID cache. Called once at server startup.
+
+        Args:
+            tlp_filter: TLPFilter instance with policy configuration
+        """
+        from .marking_registry import TLPMarkingRegistry
+
+        self.logger.info("=" * 70)
+        self.logger.info("Initializing marking registry for server-side TLP filtering...")
+
+        self.tlp_filter = tlp_filter
+        self.marking_registry = TLPMarkingRegistry(await self._get_client())
+
+        # Initialize (queries OpenCTI)
+        await self.marking_registry.initialize()
+
+        # Log cache stats
+        stats = self.marking_registry.get_cache_stats()
+        self.logger.info(
+            f"✅ Marking registry ready: {stats['total_markings']} markings "
+            f"({stats['tlp_markings']} TLP, {stats['pap_markings']} PAP, "
+            f"{stats['custom_markings']} custom)"
+        )
+        self.logger.info("=" * 70)
+
+    async def _apply_tlp_scoping(
+        self,
+        filters: Optional[List[Dict]] = None
+    ) -> Tuple[Optional[List[Dict]], Dict[str, Any]]:
+        """
+        Apply TLP scoping to OpenCTI query filters (server-side filtering).
+
+        This adds marking definition UUIDs to the filters so OpenCTI only
+        returns objects with allowed TLP markings. This is much faster than
+        client-side filtering and prevents sensitive data from being fetched.
+
+        Args:
+            filters: Existing filters list (or None)
+
+        Returns:
+            Tuple of (updated_filters, metadata)
+            - updated_filters: Filters with TLP scope, or None if can't scope
+            - metadata: Dict with scoping information for audit logging
+        """
+        metadata = {
+            "scoping_attempted": True,
+            "scoping_successful": False,
+            "reason": None,
+            "marking_uuids_count": 0
+        }
+
+        # If no marking registry, can't do server-side filtering
+        if not self.marking_registry or not self.tlp_filter:
+            metadata["reason"] = "marking_registry_not_initialized"
+            self.logger.debug("Marking registry not initialized, skipping server-side scoping")
+            return (None, metadata)
+
+        # If registry initialization failed, can't scope
+        if not self.marking_registry.initialized:
+            metadata["reason"] = "marking_registry_initialization_failed"
+            self.logger.warning("Marking registry failed to initialize, using client-side filtering")
+            return (None, metadata)
+
+        # If allow_unmarked=true, can't do server-side filtering efficiently
+        # (would need to fetch all objects to see which are unmarked)
+        if self.tlp_filter.policy.get('allow_unmarked', False):
+            metadata["reason"] = "allow_unmarked_enabled"
+            self.logger.info(
+                "allow_unmarked=true in policy, using client-side filtering"
+            )
+            return (None, metadata)
+
+        try:
+            # Get allowed marking UUIDs from policy
+            allowed_uuids = await self.marking_registry.get_allowed_marking_uuids(
+                self.tlp_filter.policy
+            )
+
+            if not allowed_uuids:
+                metadata["reason"] = "no_marking_uuids_resolved"
+                self.logger.warning(
+                    "No marking UUIDs resolved from policy, falling back to client-side filtering. "
+                    "Check your tlp_policy.yaml against OpenCTI marking definitions."
+                )
+                return (None, metadata)
+
+            # Create or update filters list
+            if filters is None:
+                filters = []
+            else:
+                # Make a copy so we don't modify original
+                filters = filters.copy()
+
+            # Add TLP marking filter
+            tlp_filter = {
+                "key": "objectMarking",
+                "values": allowed_uuids,
+                "operator": "eq",
+                "mode": "or"  # Match ANY allowed marking
+            }
+
+            filters.append(tlp_filter)
+
+            metadata["scoping_successful"] = True
+            metadata["marking_uuids_count"] = len(allowed_uuids)
+
+            self.logger.debug(
+                f"✅ Applied TLP scoping: {len(allowed_uuids)} allowed marking UUIDs"
+            )
+
+            return (filters, metadata)
+
+        except Exception as e:
+            metadata["reason"] = f"scoping_error: {str(e)}"
+            self.logger.error(f"Failed to apply TLP scoping: {e}")
+            return (None, metadata)
+
+    async def get_recent_indicators_scoped(
+        self,
+        limit: int = 10,
+        indicator_types: Optional[List[str]] = None,
+        days_back: int = 7,
+        min_confidence: int = 50,
+        use_server_side_filtering: bool = True,
+        progress_callback: Optional[Callable[[int, int, str], Awaitable[None]]] = None,
+        cancellation_token: Optional[Any] = None
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Get recent indicators with optional server-side TLP filtering (v0.4.0+).
+
+        This method tries server-side filtering first (much faster), with
+        graceful fallback to client-side filtering if needed.
+
+        Args:
+            limit: Number of indicators to retrieve
+            indicator_types: Filter by indicator types
+            days_back: How many days back to search
+            min_confidence: Minimum confidence level
+            use_server_side_filtering: Enable server-side TLP filtering
+            progress_callback: Optional callback for progress updates (v0.4.1+)
+                Signature: async def callback(current: int, total: int, message: str)
+            cancellation_token: Optional cancellation token to check (v0.4.1+)
+
+        Returns:
+            Tuple of (indicators, metadata)
+
+            metadata includes:
+            - filtering_method: "server_side" or "client_side"
+            - server_side_enabled: bool
+            - scoping_successful: bool
+            - performance_ms: int
+            - indicators_returned: int
+
+        Raises:
+            OperationCancelled: If user cancels operation via cancellation_token
+        """
+        start_time = time.time()
+
+        # Report starting progress
+        if progress_callback:
+            await progress_callback(0, limit, f"Starting query for {limit} indicators...")
+
+        metadata = {
+            "filtering_method": "none",
+            "server_side_enabled": use_server_side_filtering,
+            "scoping_successful": False,
+            "performance_ms": 0,
+            "indicators_returned": 0
+        }
+
+        try:
+            # Check cancellation before starting
+            if cancellation_token and hasattr(cancellation_token, 'is_cancelled'):
+                if cancellation_token.is_cancelled():
+                    self.logger.info("operation_cancelled", operation="get_recent_indicators", stage="pre_query")
+                    raise OperationCancelled("User cancelled operation before query started")
+
+            client = await self._get_client()
+
+            # Build base filters
+            filters = []
+
+            if indicator_types:
+                type_filter = {
+                    "key": "indicator_types",
+                    "values": indicator_types,
+                    "operator": "eq",
+                    "mode": "or"
+                }
+                filters.append(type_filter)
+
+            if min_confidence > 0:
+                confidence_filter = {
+                    "key": "confidence",
+                    "values": [str(min_confidence)],
+                    "operator": "gte"
+                }
+                filters.append(confidence_filter)
+
+            # Try to apply server-side TLP scoping
+            scoped_filters = None
+            scoping_metadata = {}
+
+            if use_server_side_filtering:
+                scoped_filters, scoping_metadata = await self._apply_tlp_scoping(filters)
+                metadata.update(scoping_metadata)
+
+            # Determine which filters to use
+            final_filters = scoped_filters if scoped_filters is not None else (filters if filters else None)
+
+            # Report progress before query
+            if progress_callback:
+                await progress_callback(0, limit, "Querying OpenCTI...")
+
+            # Check cancellation before query
+            if cancellation_token and hasattr(cancellation_token, 'is_cancelled'):
+                if cancellation_token.is_cancelled():
+                    self.logger.info("operation_cancelled", operation="get_recent_indicators", stage="before_query")
+                    raise OperationCancelled("User cancelled operation before OpenCTI query")
+
+            # Query OpenCTI
+            def _query():
+                return client.indicator.list(
+                    first=limit,
+                    filters=final_filters,
+                    orderBy="created_at",
+                    orderMode="desc"
+                )
+
+            indicators = await asyncio.get_event_loop().run_in_executor(
+                self._executor, _query
+            )
+
+            # Report progress after query
+            if progress_callback:
+                await progress_callback(limit, limit, f"Retrieved {len(indicators)} indicators")
+
+            # Check cancellation after query
+            if cancellation_token and hasattr(cancellation_token, 'is_cancelled'):
+                if cancellation_token.is_cancelled():
+                    self.logger.info("operation_cancelled", operation="get_recent_indicators", stage="after_query", indicators_fetched=len(indicators))
+                    raise OperationCancelled("User cancelled operation after OpenCTI query")
+
+            # Format indicators
+            if progress_callback:
+                await progress_callback(limit, limit, "Formatting results...")
+
+            formatted = []
+            for indicator in indicators:
+                formatted_indicator = {
+                    "id": indicator.get("id"),
+                    "pattern": indicator.get("pattern"),
+                    "indicator_types": indicator.get("indicator_types", []),
+                    "confidence": indicator.get("confidence"),
+                    "created_at": indicator.get("created_at"),
+                    "valid_from": indicator.get("valid_from"),
+                    "valid_until": indicator.get("valid_until"),
+                    "labels": [label.get("value") for label in indicator.get("objectLabel", [])],
+                    "objectMarking": indicator.get("objectMarking", [])
+                }
+                formatted.append(formatted_indicator)
+
+            # Update metadata
+            metadata["filtering_method"] = "server_side" if scoped_filters else "client_side"
+            metadata["performance_ms"] = int((time.time() - start_time) * 1000)
+            metadata["indicators_returned"] = len(formatted)
+
+            # Final progress update
+            if progress_callback:
+                await progress_callback(limit, limit, f"Complete - retrieved {len(formatted)} indicators")
+
+            self.logger.info(
+                f"✅ Retrieved {len(formatted)} indicators "
+                f"({metadata['filtering_method']} filtering, "
+                f"{metadata['performance_ms']}ms)"
+            )
+
+            return (formatted, metadata)
+
+        except OperationCancelled:
+            # Re-raise cancellation exceptions (user-initiated, not an error)
+            raise
+        except Exception as e:
+            self.logger.error(f"Failed to get indicators: {e}")
+            raise
 
     async def _resolve_entity(
         self,
@@ -770,31 +1079,41 @@ class OpenCTIClient:
             self.logger.error(f"Failed to get indicators: {e}")
             raise
 
-    async def search_by_hash(self, hash_value: str) -> List[Dict[str, Any]]:
-        """Search for indicators by hash value (MD5, SHA1, SHA256).
+    async def search_observable(self, observable_value: str) -> List[Dict[str, Any]]:
+        """Search for indicators by observable value (IP, domain, URL, email, hash).
+
+        Supports multiple observable types with automatic detection:
+        - IPv4 addresses (e.g., 192.168.1.1)
+        - IPv6 addresses (e.g., 2001:0db8:85a3::8a2e:0370:7334)
+        - Domain names (e.g., evil.com)
+        - URLs (e.g., http://malicious.com/payload.exe)
+        - Email addresses (e.g., attacker@evil.com)
+        - File hashes (MD5, SHA1, SHA256)
 
         Args:
-            hash_value: Hash value to search for
+            observable_value: Observable value to search for
 
         Returns:
             List of matching indicators
 
         Example:
-            >>> results = await client.search_by_hash(
-            ...     "44d88612fea8a8f36de82e1278abb02f"
-            ... )
+            >>> results = await client.search_observable("192.168.1.1")
             >>> if results:
-            ...     print(f"Hash found: {results[0]['pattern']}")
+            ...     print(f"Found {len(results)} indicators")
+            >>> results = await client.search_observable("evil.com")
+            >>> results = await client.search_observable("44d88612fea8a8f36de82e1278abb02f")
         """
         try:
             client = await self._get_client()
 
-            def _search_hash():
+            def _search_observable():
+                # Search for indicators matching the observable value
+                # OpenCTI's pattern field contains the actual observable value
                 indicators = client.indicator.list(
-                    search=hash_value,
+                    search=observable_value,
                     filters=[{
                         "key": "pattern",
-                        "values": [hash_value],
+                        "values": [observable_value],
                         "operator": "eq"
                     }]
                 )
@@ -814,14 +1133,14 @@ class OpenCTIClient:
                 return formatted
 
             result = await asyncio.get_event_loop().run_in_executor(
-                self._executor, _search_hash
+                self._executor, _search_observable
             )
 
-            self.logger.info(f"Hash search for {hash_value} returned {len(result)} results")
+            self.logger.info(f"Observable search for {observable_value} returned {len(result)} results")
             return result
 
         except Exception as e:
-            self.logger.error(f"Hash search failed: {e}")
+            self.logger.error(f"Observable search failed: {e}")
             raise
 
     async def get_attack_patterns(
@@ -1886,6 +2205,103 @@ class OpenCTIClient:
 
         except Exception as e:
             self.logger.error(f"Failed to get entity relationships: {e}")
+            raise
+
+    async def get_reports(
+        self,
+        limit: int = 10,
+        search_term: Optional[str] = None,
+        published_after: Optional[str] = None,
+        min_confidence: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get analytical reports from OpenCTI with filtering.
+
+        Args:
+            limit: Maximum number of reports to retrieve (default: 10)
+            search_term: Optional search term to filter reports by title/content
+            published_after: Optional ISO date (YYYY-MM-DD) for published date filter
+            min_confidence: Minimum confidence level 0-100 (default: 0)
+
+        Returns:
+            List of report dictionaries with formatted data
+
+        Example:
+            >>> reports = await client.get_reports(
+            ...     limit=10,
+            ...     search_term="APT28",
+            ...     published_after="2024-01-01",
+            ...     min_confidence=50
+            ... )
+            >>> print(f"Found {len(reports)} reports")
+        """
+        try:
+            client = await self._get_client()
+
+            def _get_reports():
+                # Build search parameters
+                kwargs = {
+                    "first": limit,
+                    "orderBy": "published",
+                    "orderMode": "desc"
+                }
+
+                if search_term:
+                    kwargs["search"] = search_term
+
+                # Build filters list for advanced filtering
+                filters = []
+
+                # Add confidence filter if specified
+                if min_confidence > 0:
+                    filters.append({
+                        "key": "confidence",
+                        "values": [str(min_confidence)],
+                        "operator": "gte"
+                    })
+
+                # Add published date filter if specified
+                if published_after:
+                    filters.append({
+                        "key": "published",
+                        "values": [published_after],
+                        "operator": "gte"
+                    })
+
+                # Add filters to kwargs if any exist
+                if filters:
+                    kwargs["filters"] = filters
+
+                # Get reports using pycti
+                reports_list = client.report.list(**kwargs)
+
+                # Format for MCP consumption
+                formatted = []
+                for report in reports_list:
+                    formatted_report = {
+                        "id": report.get("id"),
+                        "name": report.get("name"),
+                        "description": report.get("description", "No description available"),
+                        "published": report.get("published"),
+                        "confidence": report.get("confidence", 0),
+                        "report_types": report.get("report_types", []),
+                        "labels": [label.get("value") for label in report.get("objectLabel", [])],
+                        "object_refs_count": len(report.get("object_refs", [])),
+                        "created": report.get("created"),
+                        "modified": report.get("modified")
+                    }
+                    formatted.append(formatted_report)
+
+                return formatted
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                self._executor, _get_reports
+            )
+
+            self.logger.info(f"Retrieved {len(result)} reports")
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Failed to get reports: {e}")
             raise
 
     async def close(self):

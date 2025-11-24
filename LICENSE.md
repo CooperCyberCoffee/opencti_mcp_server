@@ -28,14 +28,7 @@ This project is part of the **Cooper Cyber Coffee** research initiative - demons
 
 **Built by:** [Matthew Hopkins](https://linkedin.com/in/matthew-hopkins)
 **Project:** [Cooper Cyber Coffee](https://coopercybercoffee.com)
-
-### Commercial Inquiries
-
-For consulting, custom development, enterprise support, or acquisition inquiries:
-
-**📧 Email:** business@coopercybercoffee.com
-**💼 LinkedIn:** [linkedin.com/in/matthew-hopkins](https://linkedin.com/in/matthew-hopkins)
-**🔗 Website:** [coopercybercoffee.com](https://coopercybercoffee.com)
+**Contact:** matt@coopercybercoffee.com
 
 ---
 

@@ -6,7 +6,7 @@ Licensed under the MIT License - see LICENSE.md for details
 Built by: Matthew Hopkins (https://linkedin.com/in/matthew-hopkins)
 Project: Cooper Cyber Coffee (https://coopercybercoffee.com)
 
-For consulting and enterprise inquiries: business@coopercybercoffee.com
+Contact: matt@coopercybercoffee.com
 """
 
 import os
@@ -109,7 +109,7 @@ def load_config() -> Dict[str, Any]:
 
         # MCP Server Configuration
         "mcp_server_port": int(os.getenv("MCP_SERVER_PORT", "8000")),
-        "mcp_server_host": os.getenv("MCP_SERVER_HOST", "0.0.0.0"),
+        "mcp_server_host": os.getenv("MCP_SERVER_HOST", "127.0.0.1"),
         "log_level": os.getenv("LOG_LEVEL", "INFO"),
 
         # Performance Configuration
@@ -192,6 +192,102 @@ def validate_hash(hash_value: str) -> Optional[str]:
     return hash_lengths.get(len(hash_value))
 
 
+def detect_observable_type(value: str) -> Optional[Dict[str, str]]:
+    """Detect and validate observable type from input value.
+
+    Supports detection of:
+    - IPv4 addresses
+    - IPv6 addresses
+    - Domain names
+    - URLs
+    - Email addresses
+    - File hashes (MD5, SHA1, SHA256)
+
+    Args:
+        value: Observable value to detect and validate
+
+    Returns:
+        Dictionary with 'type' and 'indicator_type' keys, or None if invalid.
+        - type: Human-readable type (e.g., 'ipv4', 'domain', 'hash-md5')
+        - indicator_type: OpenCTI indicator type (e.g., 'ipv4-addr', 'domain-name')
+
+    Example:
+        >>> detect_observable_type("192.168.1.1")
+        {'type': 'ipv4', 'indicator_type': 'ipv4-addr'}
+        >>> detect_observable_type("44d88612fea8a8f36de82e1278abb02f")
+        {'type': 'hash-md5', 'indicator_type': 'file-md5'}
+        >>> detect_observable_type("evil.com")
+        {'type': 'domain', 'indicator_type': 'domain-name'}
+    """
+    if not value or not isinstance(value, str):
+        return None
+
+    value = value.strip()
+
+    # Check for URL first (most specific)
+    url_pattern = re.compile(
+        r'^https?://'  # http:// or https://
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain
+        r'localhost|'  # localhost
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # IP address
+        r'(?::\d+)?'  # optional port
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE
+    )
+    if url_pattern.match(value):
+        return {'type': 'url', 'indicator_type': 'url'}
+
+    # Check for email address
+    email_pattern = re.compile(
+        r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    )
+    if email_pattern.match(value):
+        return {'type': 'email', 'indicator_type': 'email-addr'}
+
+    # Check for IPv6 address (comprehensive pattern)
+    ipv6_pattern = re.compile(
+        r'^('
+        r'([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|'  # Full form
+        r'([0-9a-fA-F]{1,4}:){1,7}:|'  # :: at end
+        r'([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|'  # :: with one group after
+        r'([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|'  # :: with two groups after
+        r'([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|'  # :: with three groups after
+        r'([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|'  # :: with four groups after
+        r'([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|'  # :: with five groups after
+        r'[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|'  # :: with six groups after
+        r':((:[0-9a-fA-F]{1,4}){1,7}|:)'  # :: at start
+        r')$'
+    )
+    if ipv6_pattern.match(value):
+        return {'type': 'ipv6', 'indicator_type': 'ipv6-addr'}
+
+    # Check for IPv4 address
+    ipv4_pattern = re.compile(
+        r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}'
+        r'(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+    )
+    if ipv4_pattern.match(value):
+        return {'type': 'ipv4', 'indicator_type': 'ipv4-addr'}
+
+    # Check for file hash (MD5, SHA1, SHA256)
+    hash_type = validate_hash(value)
+    if hash_type:
+        return {
+            'type': f'hash-{hash_type}',
+            'indicator_type': f'file-{hash_type}'
+        }
+
+    # Check for domain name (least specific, check last)
+    # Domain must have at least one dot and valid characters
+    domain_pattern = re.compile(
+        r'^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+    )
+    if domain_pattern.match(value):
+        return {'type': 'domain', 'indicator_type': 'domain-name'}
+
+    # No match found
+    return None
+
+
 def format_error_message(error: Exception, context: str = "") -> str:
     """Format exception as user-friendly error message.
 
@@ -251,13 +347,13 @@ def get_version_info() -> Dict[str, str]:
         '1.0.0'
     """
     return {
-        "version": "1.0.0",
+        "version": "0.4.2",
         "name": "Cooper Cyber Coffee OpenCTI MCP Server",
         "author": "Matthew Hopkins / Cooper Cyber Coffee",
         "license": "MIT",
         "opencti_version_required": "6.x",
         "project_url": "https://coopercybercoffee.com",
-        "contact": "business@coopercybercoffee.com"
+        "contact": "matt@coopercybercoffee.com"
     }
 
 

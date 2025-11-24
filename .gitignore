@@ -63,3 +63,7 @@ mcp_sessions/
 
 # Docker
 .dockerignore
+
+# User-customized configuration (optional - allows users to keep private configs)
+config/*.local.md
+config/templates/*.local.md
