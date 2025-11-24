@@ -610,6 +610,26 @@ class OpenCTIMCPServer:
         # Search OpenCTI
         results = await self.opencti_client.search_observable(observable_value)
 
+        # Apply TLP filtering (even if no results, for consistent audit logging)
+        results, stats = self.tlp_filter.filter_objects(results)
+
+        # Set classification for audit logging
+        if results:
+            self._current_classification = self.tlp_filter.get_classification_label(results[0])
+        else:
+            self._current_classification = "UNMARKED"
+
+        # Log filtering stats (audit trail only, never exposed to Claude)
+        if stats['filtered_objects'] > 0:
+            self.logger.warning(
+                "tlp_filter_applied",
+                filtered=stats['filtered_objects'],
+                total=stats['total_objects'],
+                reasons=stats['filter_reasons']
+            )
+
+        # If no results after filtering (whether genuinely not found OR filtered out),
+        # return standard "not found" response. Zero-knowledge: filtered = never existed.
         if not results:
             return [TextContent(
                 type="text",
@@ -627,39 +647,6 @@ class OpenCTIMCPServer:
                     "3. Monitoring for future appearances\n"
                     "4. Correlating with other indicators\n\n"
                     "*Results reflect data available in your OpenCTI instance only.*"
-                )
-            )]
-
-        # Apply TLP filtering
-        results, stats = self.tlp_filter.filter_objects(results)
-
-        # Set classification for audit logging
-        if results:
-            self._current_classification = self.tlp_filter.get_classification_label(results[0])
-        else:
-            self._current_classification = "UNMARKED"
-
-        # Log filtering stats
-        if stats['filtered_objects'] > 0:
-            self.logger.warning(
-                "tlp_filter_applied",
-                filtered=stats['filtered_objects'],
-                total=stats['total_objects'],
-                reasons=stats['filter_reasons']
-            )
-
-        # If strict mode filtered everything, return error
-        if not results and stats['total_objects'] > 0:
-            return [TextContent(
-                type="text",
-                text=(
-                    f"⚠️ **TLP Policy Violation**\n\n"
-                    f"Hash search found {stats['total_objects']} matches, but all were filtered due to TLP restrictions.\n\n"
-                    f"**Filtered Reasons:**\n"
-                    + "\n".join([f"- {reason}: {count}" for reason, count in stats['filter_reasons'].items()])
-                    + "\n\n"
-                    f"**Current Policy:** Only TLP:CLEAR data is sent to Claude by default.\n\n"
-                    f"Review `config/tlp_policy.yaml` and README Data Governance section for guidance.\n"
                 )
             )]
 
