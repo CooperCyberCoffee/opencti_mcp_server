@@ -677,7 +677,7 @@ class OpenCTIMCPServer:
         for idx, result in enumerate(results, 1):
             output += f"## Match {idx}\n\n"
             output += f"- **Pattern:** `{result.get('pattern', 'N/A')}`\n"
-            output += f"- **Indicator Types:** {', '.join(result.get('indicator_types', ['unknown']))}\n"
+            output += f"- **Indicator Types:** {', '.join(result.get('indicator_types') or ['unknown'])}\n"
             output += f"- **Confidence:** {result.get('confidence', 0)}%\n"
             output += f"- **Created:** {result.get('created_at', 'N/A')}\n"
 

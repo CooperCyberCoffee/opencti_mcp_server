@@ -1122,7 +1122,8 @@ class OpenCTIClient:
                         "indicator_types": indicator.get("indicator_types", []),
                         "confidence": indicator.get("confidence"),
                         "created_at": indicator.get("created_at"),
-                        "labels": [label.get("value") for label in indicator.get("objectLabel", [])]
+                        "labels": [label.get("value") for label in indicator.get("objectLabel", [])],
+                        "objectMarking": indicator.get("objectMarking", [])
                     }
                     formatted.append(formatted_indicator)
 
