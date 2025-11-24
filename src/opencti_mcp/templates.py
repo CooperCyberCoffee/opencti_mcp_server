@@ -6,7 +6,7 @@ Licensed under the MIT License - see LICENSE.md for details
 Built by: Matthew Hopkins (https://linkedin.com/in/matthew-hopkins)
 Project: Cooper Cyber Coffee (https://coopercybercoffee.com)
 
-For consulting and enterprise inquiries: business@coopercybercoffee.com
+Contact: matt@coopercybercoffee.com
 """
 
 from typing import Dict, Any

@@ -1,0 +1,46 @@
+# Cooper Cyber Coffee OpenCTI MCP Server - TLP Policy Configuration
+# Copyright (c) 2025 Matthew Hopkins / Cooper Cyber Coffee
+#
+# This file controls what Traffic Light Protocol (TLP) markings are allowed
+# to be sent to Claude for analysis.
+#
+# CISA TLP Guidance: https://www.cisa.gov/news-events/news/traffic-light-protocol-tlp-definitions-and-usage
+#
+# TLP Levels (most to least restrictive):
+#   - TLP:RED          - Eyes and ears of individual recipients only
+#   - TLP:AMBER+STRICT - Limited to organization and its clients
+#   - TLP:AMBER        - Limited to participants' organizations
+#   - TLP:GREEN        - Limited disclosure, community wide
+#   - TLP:CLEAR        - May be distributed without restriction (formerly TLP:WHITE)
+#
+# WARNING: Sending sensitive threat intelligence to cloud LLMs may violate
+# your organization's data handling policies or compliance requirements.
+
+# Allowed TLP markings (case-insensitive)
+# Default: Only TLP:CLEAR (safest for cloud LLM processing)
+allowed_markings:
+  - "TLP:CLEAR"
+  - "TLP:WHITE"    # Legacy marking, equivalent to TLP:CLEAR
+
+# Allow objects with NO TLP marking?
+# Default: false (reject unmarked data as potentially sensitive)
+# Set to true only if you trust all data in your OpenCTI instance
+allow_unmarked: false
+
+# Custom markings (if your organization uses non-standard TLP)
+# Example: ["INTERNAL:PUBLIC", "UNCLASSIFIED", "OPEN SOURCE"]
+custom_allowed_markings: []
+
+# Strict mode: Reject queries if ANY returned object violates policy
+# Default: true (fail closed)
+# If false: Filter out non-compliant objects but return compliant ones
+strict_mode: true
+
+# Audit logging
+log_filtered_objects: true  # Log when objects are filtered (recommended)
+log_level: "INFO"           # DEBUG, INFO, WARN, ERROR
+
+# Policy metadata
+policy_version: "1.0"
+last_reviewed: "2025-01-19"
+reviewed_by: "security_team@organization.com"

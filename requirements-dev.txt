@@ -1,0 +1,25 @@
+# Cooper Cyber Coffee OpenCTI MCP Server - Development and Security Tools
+# Copyright (c) 2025 Matthew Hopkins / Cooper Cyber Coffee
+#
+# Used for code quality, security scanning, and testing
+# Install with: pip install -r requirements-dev.txt
+
+# Security Scanning
+safety>=3.0.0          # CVE database checking
+pip-audit>=2.6.0       # Dependency vulnerability scanning
+bandit>=1.7.0          # Security linter for Python code
+
+# Code Quality
+black>=24.0.0          # Code formatter
+pylint>=3.0.0          # Code linter
+mypy>=1.7.0            # Static type checker
+isort>=5.12.0          # Import sorting
+
+# Testing
+pytest>=7.4.0          # Testing framework
+pytest-asyncio>=0.21.0 # Async test support
+pytest-cov>=4.1.0      # Coverage reporting
+
+# Type Stubs for Better Type Checking
+types-pyyaml>=6.0.0
+types-setuptools>=69.0.0

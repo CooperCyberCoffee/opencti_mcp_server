@@ -1,23 +1,44 @@
-# Cooper Cyber Coffee OpenCTI MCP Server - Requirements
+# Cooper Cyber Coffee OpenCTI MCP Server - Production Dependencies
+# Security: Versions pinned to major release, allow minor/patch updates
+# Last audited: 2025-01-19
 # Copyright (c) 2025 Matthew Hopkins / Cooper Cyber Coffee
 
-# MCP Protocol Support
-mcp>=1.0.0
+# Core MCP Framework
+mcp>=1.0.0,<2.0.0
 
-# OpenCTI Official Python Client
-pycti>=6.0.0
+# OpenCTI Integration
+# Requires OpenCTI 6.x server
+pycti>=6.0.0,<7.0.0
 
-# Async HTTP Support
-aiohttp>=3.8.0
+# Async HTTP Client
+# Security: Multiple CVEs in older versions, use 3.9+
+# CVE-2024-XXXX fixed in 3.9.0+
+aiohttp>=3.9.0,<4.0.0
+
+# Security - Cryptography Library (CVE fixes v0.4.2)
+# PYSEC-2024-225 (HIGH), GHSA-3ww4-gg4f-jr7f (HIGH)
+# GHSA-9v9h-cgj8-h64p (MEDIUM), GHSA-h4gh-qq45-vh27 (HIGH)
+cryptography>=43.0.1,<44.0.0
+
+# Security - Cryptography Library (CVE fixes v0.4.2)
+# PYSEC-2024-225 (HIGH), GHSA-3ww4-gg4f-jr7f (HIGH)
+# GHSA-9v9h-cgj8-h64p (MEDIUM), GHSA-h4gh-qq45-vh27 (HIGH)
+cryptography>=43.0.1,<44.0.0
 
 # Environment Configuration
-python-dotenv>=1.0.0
+python-dotenv>=1.0.0,<2.0.0
 
 # Data Validation
-pydantic>=2.0.0
+# Note: v2 is major rewrite from v1, pin to 2.x
+pydantic>=2.0.0,<3.0.0
 
-# Logging and Monitoring
-structlog>=24.0.0
+# Structured Logging
+structlog>=24.0.0,<25.0.0
 
 # Type Hints Support
-typing-extensions>=4.0.0
+typing-extensions>=4.0.0,<5.0.0
+
+# YAML Parsing
+# Security: Use >=6.0, always use yaml.safe_load() not yaml.load()
+# CVE-2020-14343 fixed in 5.4+, recommend 6.0+
+pyyaml>=6.0.0,<7.0.0

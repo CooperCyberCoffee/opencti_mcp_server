@@ -6,7 +6,7 @@ Licensed under the MIT License - see LICENSE.md for details
 Built by: Matthew Hopkins (https://linkedin.com/in/matthew-hopkins)
 Project: Cooper Cyber Coffee (https://coopercybercoffee.com)
 
-For consulting and enterprise inquiries: business@coopercybercoffee.com
+Contact: matt@coopercybercoffee.com
 """
 
 from mcp.types import Tool
@@ -96,21 +96,29 @@ def get_mcp_tools() -> List[Tool]:
         ),
 
         Tool(
-            name="search_by_hash_with_context",
+            name="search_observable",
             description=(
-                "Search for indicators by hash value (MD5, SHA1, SHA256) with "
-                "contextual analysis. Returns matching indicators and optional "
-                "threat context including labels, confidence, and related campaigns."
+                "Search for threat intelligence indicators by observable value with "
+                "automatic type detection and contextual analysis. Supports IPv4/IPv6 "
+                "addresses, domain names, URLs, email addresses, and file hashes "
+                "(MD5, SHA1, SHA256). Returns matching indicators with threat context "
+                "including labels, confidence scores, and related campaigns."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "hash": {
+                    "value": {
                         "type": "string",
-                        "pattern": "^[a-fA-F0-9]+$",
                         "description": (
-                            "Hash value to search for (MD5: 32 chars, "
-                            "SHA1: 40 chars, SHA256: 64 chars)"
+                            "Observable value to search for. Automatically detects type:\n"
+                            "- IPv4: 192.168.1.1\n"
+                            "- IPv6: 2001:0db8:85a3::8a2e:0370:7334\n"
+                            "- Domain: evil.com, malware.example.org\n"
+                            "- URL: http://malicious.com/payload.exe\n"
+                            "- Email: attacker@evil.com\n"
+                            "- Hash (MD5): 44d88612fea8a8f36de82e1278abb02f\n"
+                            "- Hash (SHA1): 356a192b7913b04c54574d18c28d46e6395428ab\n"
+                            "- Hash (SHA256): e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                         )
                     },
                     "include_context": {
@@ -122,7 +130,7 @@ def get_mcp_tools() -> List[Tool]:
                         )
                     }
                 },
-                "required": ["hash"]
+                "required": ["value"]
             }
         ),
 
@@ -548,6 +556,49 @@ def get_mcp_tools() -> List[Tool]:
                 },
                 "required": ["entity_id"]
             }
+        ),
+
+        Tool(
+            name="get_reports",
+            description=(
+                "Query analytical threat intelligence reports from OpenCTI. Retrieves "
+                "reports with titles, descriptions, published dates, and confidence scores. "
+                "Reports are analytical documents that tie together threat intelligence "
+                "across multiple entities and provide narrative context."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 10,
+                        "description": "Number of reports to retrieve (1-50)"
+                    },
+                    "search_term": {
+                        "type": "string",
+                        "description": (
+                            "Optional search term to filter reports by title or content "
+                            "(e.g., 'APT28', 'ransomware', 'SolarWinds', 'Ukraine')"
+                        )
+                    },
+                    "published_after": {
+                        "type": "string",
+                        "description": (
+                            "Optional ISO date (YYYY-MM-DD) - retrieve reports published "
+                            "after this date (e.g., '2024-01-01')"
+                        )
+                    },
+                    "min_confidence": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100,
+                        "default": 0,
+                        "description": "Minimum confidence level (0-100, default: 0 = all reports)"
+                    }
+                }
+            }
         )
     ]
 
@@ -569,9 +620,10 @@ def get_tool_descriptions() -> dict:
             "timeframe, with output formatted for executive, technical, incident "
             "response, or trend analysis use cases."
         ),
-        "search_by_hash_with_context": (
-            "Search OpenCTI for specific hash values (MD5, SHA1, SHA256) and "
-            "retrieve contextual threat intelligence including confidence scores, "
+        "search_observable": (
+            "Search OpenCTI for threat intelligence indicators by observable value "
+            "(IPv4, IPv6, domains, URLs, emails, hashes) with automatic type detection. "
+            "Retrieves contextual threat intelligence including confidence scores, "
             "labels, and campaign associations."
         ),
         "validate_opencti_connection": (
