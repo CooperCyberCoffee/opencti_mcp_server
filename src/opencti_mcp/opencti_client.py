@@ -1107,15 +1107,11 @@ class OpenCTIClient:
             client = await self._get_client()
 
             def _search_observable():
-                # Search for indicators matching the observable value
-                # OpenCTI's pattern field contains the actual observable value
+                # Use pycti's search parameter - no GraphQL filters needed
+                # pycti automatically searches pattern fields and other relevant fields
                 indicators = client.indicator.list(
                     search=observable_value,
-                    filters=[{
-                        "key": "pattern",
-                        "values": [observable_value],
-                        "operator": "eq"
-                    }]
+                    first=100  # Add reasonable limit
                 )
 
                 formatted = []
