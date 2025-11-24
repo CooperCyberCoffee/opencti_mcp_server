@@ -3,12 +3,17 @@
 ## Project Overview
 Building an MCP server that bridges Claude Desktop with OpenCTI 6.x for AI-augmented threat intelligence analysis. This addresses the "cyber poverty line" - making threat intelligence accessible to organizations that can't afford $500k enterprise platforms.
 
-**Current Version:** v0.4.1
+**Current Version:** v0.4.2
 **Status:** Production Ready
 
 Target: $20/month operational cost vs $500k/year enterprise TIPs.
 
-## Recent Features (v0.4.1)
+## Recent Features (v0.4.2)
+- **Multi-Observable Search:** Auto-detects and enriches 6 observable types (IPv4, IPv6, domains, URLs, emails, file hashes)
+- **Zero-Knowledge TLP Filtering:** Filtered results indistinguishable from "not found" - no metadata leakage
+- **Enhanced Security:** Fixed TLP marking detection, null handling, and strict mode information disclosure
+
+## Previous Features (v0.4.1 and earlier)
 - **Progress Reporting:** Real-time status updates for long-running OpenCTI queries via MCP context
 - **Operation Cancellation:** User can cancel operations mid-execution with clean abort and audit trail
 - **Enhanced Visibility:** Better debugging with progress milestones and operation lifecycle tracking

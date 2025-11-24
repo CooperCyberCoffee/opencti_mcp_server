@@ -1038,8 +1038,6 @@ class OpenCTIClient:
                         "filterGroups": []
                     }
 
-                self.logger.info(f"[DEBUG] get_recent_indicators filters: {filters}")
-
                 # Get indicators
                 indicators = client.indicator.list(
                     first=limit,
@@ -1047,8 +1045,6 @@ class OpenCTIClient:
                     orderBy="created_at",
                     orderMode="desc"
                 )
-
-                self.logger.info(f"[DEBUG] indicator.list returned {len(indicators) if indicators else 0} results")
 
                 # Format for MCP consumption
                 formatted = []

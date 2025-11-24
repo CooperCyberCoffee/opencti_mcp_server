@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.4.2] - 2025-01-20
+## [0.4.2] - 2025-11-24
 
 ### 🎉 Release Highlights
 
@@ -42,6 +42,28 @@ Version 0.4.2 is the **IOC Enrichment Expansion Release** with unified observabl
   - **Network access**: Set `MCP_SERVER_HOST=0.0.0.0` in `.env` if needed (advanced use case)
   - **Documentation**: Added security considerations and best practices to README
   - **Configuration**: Updated `.env.example` with security guidance for network binding
+
+**Zero-Knowledge TLP Filtering:**
+- **Fixed TLP marking detection** - `objectMarking` field now properly passed through in `search_observable` results
+  - **Root cause**: Formatted indicator dict was missing `objectMarking` field from pycti response
+  - **Impact**: TLP:CLEAR indicators were incorrectly flagged as "no_marking" and filtered out
+  - **File**: `src/opencti_mcp/opencti_client.py` - Added `objectMarking` to formatted results
+
+- **Fixed null indicator_types crash** - Handle `None` values in indicator_types field
+  - **Root cause**: Used dict default `['unknown']` which doesn't handle `None` (only missing keys)
+  - **Fix**: Changed to `or ['unknown']` pattern which handles both `None` and missing keys
+  - **File**: `src/opencti_mcp/server.py` - `_handle_search_observable` method
+
+- **Eliminated TLP metadata leakage in search responses** - Zero-knowledge principle enforced
+  - **Before**: Filtered results showed "Found in database" with "Matches: 0" (leaked existence)
+  - **After**: Filtered results indistinguishable from genuine "not found"
+  - **Security principle**: If data is filtered, the response reveals nothing about its existence
+  - **File**: `src/opencti_mcp/server.py` - Removed "TLP Policy Violation" message block
+
+- **Eliminated TLP metadata leakage in strict mode stats** (from v0.4.2 pre-release)
+  - **Before**: Stats revealed `filtered_objects` count even when data was restricted
+  - **After**: Stats return zeros when filtering occurs - no metadata exposure
+  - **File**: `src/opencti_mcp/tlp_filter.py` - `filter_objects` method returns empty stats in strict mode
 
 ---
 

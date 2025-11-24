@@ -9,6 +9,6 @@ Project: Cooper Cyber Coffee (https://coopercybercoffee.com)
 Contact: matt@coopercybercoffee.com
 """
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 __author__ = "Matthew Hopkins / Cooper Cyber Coffee"
 __license__ = "MIT"
