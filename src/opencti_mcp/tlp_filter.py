@@ -530,14 +530,22 @@ class TLPFilter:
             "filter_reasons": filter_reasons
         }
 
-        # If strict_mode and ANY filtered: return empty list
+        # If strict_mode and ANY filtered: return empty list with zero stats
         if self.policy['strict_mode'] and stats['filtered_objects'] > 0:
             self.logger.error(
                 f"Strict mode: Rejecting entire query result. "
                 f"{stats['filtered_objects']}/{stats['total_objects']} objects filtered. "
                 f"Reasons: {filter_reasons}"
             )
-            return ([], stats)
+            # Return empty stats - no information leakage about what was filtered
+            # To external systems (Claude), this looks like "no results found"
+            empty_stats = {
+                "total_objects": 0,
+                "allowed_objects": 0,
+                "filtered_objects": 0,
+                "filter_reasons": {}
+            }
+            return ([], empty_stats)
 
         # Return filtered list + stats
         return (filtered, stats)
