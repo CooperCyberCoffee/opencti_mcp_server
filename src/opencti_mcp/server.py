@@ -11,7 +11,7 @@ Contact: matt@coopercybercoffee.com
 
 import asyncio
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from mcp.server import Server
 from mcp import types
 from mcp.types import (
