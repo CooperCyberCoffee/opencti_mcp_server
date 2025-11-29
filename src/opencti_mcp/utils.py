@@ -347,7 +347,7 @@ def get_version_info() -> Dict[str, str]:
         '1.0.0'
     """
     return {
-        "version": "0.4.2",
+        "version": "0.4.2.1",
         "name": "Cooper Cyber Coffee OpenCTI MCP Server",
         "author": "Matthew Hopkins / Cooper Cyber Coffee",
         "license": "MIT",

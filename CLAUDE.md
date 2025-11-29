@@ -3,7 +3,7 @@
 ## Project Overview
 Building an MCP server that bridges Claude Desktop with OpenCTI 6.x for AI-augmented threat intelligence analysis. This addresses the "cyber poverty line" - making threat intelligence accessible to organizations that can't afford $500k enterprise platforms.
 
-**Current Version:** v0.4.2
+**Current Version:** v0.4.2.1
 **Status:** Production Ready
 
 Target: $20/month operational cost vs $500k/year enterprise TIPs.

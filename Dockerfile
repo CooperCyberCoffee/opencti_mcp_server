@@ -2,7 +2,7 @@ FROM python:3.9-slim
 
 LABEL maintainer="Matthew Hopkins <matt@coopercybercoffee.com>"
 LABEL description="Cooper Cyber Coffee OpenCTI MCP Server"
-LABEL version="0.4.2"
+LABEL version="0.4.2.1"
 
 WORKDIR /app
 
