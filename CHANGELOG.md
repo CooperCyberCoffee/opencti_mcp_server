@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.2.1] - 2025-11-24
+
+### 🐛 Fixed
+- **Missing import bug** - Added `Optional` to typing imports in `server.py`
+  - **Symptom:** `NameError: name 'Optional' is not defined` on startup
+  - **Impact:** Server would not start at all
+  - **Found by:** Community user installing on Linux with Zed
+
+---
+
 ## [0.4.2] - 2025-11-24
 
 ### 🎉 Release Highlights
@@ -930,7 +940,8 @@ See [MIGRATION.md](MIGRATION.md) for detailed upgrade instructions from v0.1.0 t
 
 ---
 
-[Unreleased]: https://github.com/CooperCyberCoffee/opencti_mcp_server/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/CooperCyberCoffee/opencti_mcp_server/compare/v0.4.2.1...HEAD
+[0.4.2.1]: https://github.com/CooperCyberCoffee/opencti_mcp_server/compare/v0.4.2...v0.4.2.1
 [0.4.2]: https://github.com/CooperCyberCoffee/opencti_mcp_server/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/CooperCyberCoffee/opencti_mcp_server/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/CooperCyberCoffee/opencti_mcp_server/compare/v0.3.0...v0.4.0

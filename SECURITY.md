@@ -305,4 +305,4 @@ We thank the security researchers and community members who help keep this proje
 *This security policy demonstrates Cooper Cyber Coffee's commitment to security-first development and responsible disclosure practices.*
 
 **Last Updated:** 2025-11-20
-**Version:** 0.4.2
+**Version:** 0.4.2.1

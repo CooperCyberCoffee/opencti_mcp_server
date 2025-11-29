@@ -3,7 +3,7 @@
 **Connect Claude Desktop to OpenCTI for AI-augmented threat intelligence analysis**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.4.2-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.2.1-blue.svg)](CHANGELOG.md)
 [![OpenCTI](https://img.shields.io/badge/OpenCTI-6.x-green.svg)](https://www.opencti.io/)
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://python.org)
 [![Claude Desktop](https://img.shields.io/badge/Claude-Desktop-purple.svg)](https://claude.ai/)
